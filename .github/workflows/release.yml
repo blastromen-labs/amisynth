@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Amiga toolchain
+        run: |
+          set -euo pipefail
+          curl -fsSL -o amiga-debug.vsix \
+            https://github.com/BartmanAbyss/vscode-amiga-debug/releases/download/1.8.2/amiga-debug-1.8.2.vsix
+          unzip -q amiga-debug.vsix "extension/bin/linux/*"
+          mkdir -p toolchain
+          mv extension/bin/linux/* toolchain/
+          rm -rf amiga-debug.vsix extension
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          export PATH="$GITHUB_WORKSPACE/toolchain/opt/bin:$GITHUB_WORKSPACE/toolchain:$PATH"
+          make -j"$(nproc)"
+          test -f out/amisynth.exe
+
+      - name: Attach the binary to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/amisynth.exe
+            out/amisynth.exe.info
