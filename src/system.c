@@ -102,13 +102,33 @@ void system_shutdown(void) {
 	workbench_reply();
 }
 
-/* One long read samples both beam registers together. Sync to the leading
+/* Alice stops updating the picture if $DFF004 is read as a long. The two
+   beam words are read separately. Only the vertical bit is compared, because
+   the other bits of VPOSR are not stable on an A1200. Sync to the leading
    edge of line 311, in the bottom border before the copper restarts. */
+static UWORD beam_line(void) {
+	UWORD high = (UWORD)(custom->vposr & 1);
+	UWORD low = custom->vhposr;
+
+	if (high != (custom->vposr & 1)) {
+		high = (UWORD)(custom->vposr & 1);
+		low = custom->vhposr;
+	}
+	return (UWORD)((high << 8) | (low >> 8));
+}
+
 void system_wait_vbl(void) {
-	while ((*(volatile ULONG *)0xdff004 & 0x1ff00) == (311UL << 8))
-		;
-	while ((*(volatile ULONG *)0xdff004 & 0x1ff00) != (311UL << 8))
-		;
+	unsigned guard = 0;
+
+	while (beam_line() >= 311) {
+		if (++guard >= 400000)
+			return;
+	}
+	guard = 0;
+	while (beam_line() < 311) {
+		if (++guard >= 400000)
+			return;
+	}
 }
 
 void system_take(void) {
