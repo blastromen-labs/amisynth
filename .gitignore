@@ -1,0 +1,17 @@
+# Build output. DELETE.ME keeps the directories so make can write into them.
+obj/*
+!obj/DELETE.ME
+out/*
+!out/DELETE.ME
+
+# Toolchain leftovers
+*.o
+*.d
+*.elf
+*.exe
+*.map
+*.listing
+
+# Emulator and OS junk
+*.uaem
+.DS_Store
