@@ -21,6 +21,7 @@ jobs:
           unzip -q amiga-debug.vsix "extension/bin/linux/*"
           mkdir -p toolchain
           mv extension/bin/linux/* toolchain/
+          find toolchain -type f -exec chmod +x {} +
           rm -rf amiga-debug.vsix extension
 
       - name: Build
