@@ -16,7 +16,7 @@ A stock PAL A1200 and a mouse are enough. Copy `amisynth.exe.info` next to the p
 
 ## Releases
 
-Publishing a GitHub release builds `amisynth.exe` and attaches it to that release, together with the Workbench icon.
+Publishing a GitHub release builds `amisynth.exe` and attaches it to that release, together with the Workbench icon. The same workflow can be run by hand from the Actions tab, and that run attaches the files to the latest release.
 
 ## Build
 
