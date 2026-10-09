@@ -1,22 +1,25 @@
 #include "system.h"
 #include "config.h"
 
-#include <proto/dos.h>
 #include <proto/exec.h>
+#include <proto/graphics.h>
 #include <dos/dosextens.h>
 #include <exec/execbase.h>
-#include <proto/graphics.h>
-#include <workbench/startup.h>
 #include <graphics/gfxbase.h>
 #include <hardware/custom.h>
 #include <hardware/dmabits.h>
 #include <hardware/intbits.h>
+#include <workbench/startup.h>
 
 struct ExecBase *SysBase;
 volatile struct Custom *custom;
-struct DosLibrary *DOSBase;
 struct GfxBase *GfxBase;
 
+static const VideoTiming pal_timing = { VIDEO_PAL_LINES, VIDEO_PAL_FRAME_MHZ };
+static const VideoTiming ntsc_timing = { VIDEO_NTSC_LINES, VIDEO_NTSC_FRAME_MHZ };
+
+static const VideoTiming *video = &pal_timing;
+static UWORD sync_line;
 static UWORD system_ints;
 static UWORD system_dma;
 static UWORD system_adkcon;
@@ -35,12 +38,16 @@ static void workbench_accept(void) {
 
 	if (self->pr_CLI)
 		return;
+	WaitPort(&self->pr_MsgPort);
 	workbench_message = (struct WBStartup *)GetMsg(&self->pr_MsgPort);
 }
 
+/* Workbench unloads the program as soon as it sees the reply. Forbid keeps it
+   waiting until this process has ended. */
 static void workbench_reply(void) {
 	if (!workbench_message)
 		return;
+	Forbid();
 	ReplyMsg(&workbench_message->sm_Message);
 	workbench_message = 0;
 }
@@ -63,72 +70,53 @@ static APTR get_interrupt_handler(void) {
 	return *(volatile APTR *)(((UBYTE *)vbr) + 0x6c);
 }
 
-APTR system_swap_exter(APTR handler) {
-	volatile APTR *slot = (volatile APTR *)(((UBYTE *)vbr) + 0x78);
-	APTR previous = *slot;
-	*slot = handler;
-	return previous;
-}
-
-void system_init(void) {
+short system_init(void) {
 	UWORD raw;
 
 	SysBase = *((struct ExecBase **)4UL);
 	custom = (struct Custom *)0xdff000;
 	workbench_accept();
 
-	DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 0);
 	GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 0);
-	if (!DOSBase || !GfxBase) {
-		if (DOSBase) {
-			workbench_reply();
-			Exit(0);
-		}
-		return;
-	}
+	if (!GfxBase)
+		return 0;
+
+	video = (GfxBase->DisplayFlags & PAL) ? &pal_timing : &ntsc_timing;
+	sync_line = DISPLAY_TOP + SCREEN_HEIGHT;
+	if (sync_line > video->lines - 2)
+		sync_line = video->lines - 2;
 
 	raw = custom->joy0dat;
 	mouse_raw_x = (UBYTE)raw;
 	mouse_raw_y = (UBYTE)(raw >> 8);
+	return 1;
 }
 
 void system_shutdown(void) {
-	if (DOSBase)
-		CloseLibrary((struct Library *)DOSBase);
 	if (GfxBase)
 		CloseLibrary((struct Library *)GfxBase);
-	DOSBase = 0;
 	GfxBase = 0;
 	workbench_reply();
 }
 
-/* Alice stops updating the picture if $DFF004 is read as a long. The two
-   beam words are read separately. Only the vertical bit is compared, because
-   the other bits of VPOSR are not stable on an A1200. Sync to the leading
-   edge of line 311, in the bottom border before the copper restarts. */
-static UWORD beam_line(void) {
-	UWORD high = (UWORD)(custom->vposr & 1);
-	UWORD low = custom->vhposr;
-
-	if (high != (custom->vposr & 1)) {
-		high = (UWORD)(custom->vposr & 1);
-		low = custom->vhposr;
-	}
-	return (UWORD)((high << 8) | (low >> 8));
+const VideoTiming *system_video(void) {
+	return video;
 }
 
-void system_wait_vbl(void) {
-	unsigned guard = 0;
+static UWORD beam_line(void) {
+	return (UWORD)((*(volatile ULONG *)0xdff004 >> 8) & 0x7ff);
+}
 
-	while (beam_line() >= 311) {
-		if (++guard >= 400000)
-			return;
-	}
-	guard = 0;
-	while (beam_line() < 311) {
-		if (++guard >= 400000)
-			return;
-	}
+/* Returns once the beam is below the picture, so the next frame shows whatever
+   the copper list points at now. */
+void system_wait_vbl(void) {
+	ULONG polls = BEAM_WAIT_POLLS;
+
+	while (beam_line() >= sync_line && --polls)
+		;
+	polls = BEAM_WAIT_POLLS;
+	while (beam_line() < sync_line && --polls)
+		;
 }
 
 void system_take(void) {
@@ -187,6 +175,23 @@ void system_free(void) {
 	WaitTOF();
 	WaitTOF();
 	Permit();
+}
+
+/* Level 3 only carries Alice's own requests, so nothing on the expansion or
+   PCMCIA side can raise it. The CIAs stay untouched for AmigaOS. */
+void system_ticks_on(void (*handler)(void)) {
+	custom->intena = INTF_COPER;
+	custom->intreq = INTF_COPER;
+	custom->intreq = INTF_COPER;
+	set_interrupt_handler((APTR)handler);
+	custom->intena = INTF_SETCLR | INTF_INTEN | INTF_COPER;
+}
+
+void system_ticks_off(void) {
+	custom->intena = INTF_COPER;
+	custom->intreq = INTF_COPER;
+	custom->intreq = INTF_COPER;
+	set_interrupt_handler(system_irq);
 }
 
 void system_mouse_update(void) {

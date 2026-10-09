@@ -5,16 +5,8 @@
 #include "system.h"
 #include "voice.h"
 
-#include <hardware/cia.h>
 #include <hardware/custom.h>
 #include <hardware/intbits.h>
-
-/* PAL CIA E-clock. The voice runs at 200 Hz so the envelope can move between steps. */
-#define VOICE_RATE 200UL
-#define E_CLOCK 709379UL
-
-static volatile struct CIA *const ciaa = (volatile struct CIA *)0xbfe001;
-static volatile struct CIA *const ciab = (volatile struct CIA *)0xbfd000;
 
 extern volatile struct Custom *custom;
 
@@ -27,12 +19,13 @@ static UBYTE global_wave = SYNTH_WAVE_SQUARE;
 static UBYTE per_step;
 static UBYTE edit_dur;
 static UBYTE dur_preset = 6;
-static volatile UBYTE playing = 0;
+/* The main loop only asks; the tick interrupt owns the voice and Paula. */
+static volatile UBYTE want_play;
+static UBYTE playing;
 static UWORD step_countdown;
 static UWORD gate_left;
-static ULONG voice_error;
+static ULONG step_numer;
 static ULONG step_error;
-static APTR saved_exter;
 static UBYTE clock_running;
 
 static const UBYTE pattern_lengths[] = { 3, 4, 6, 8, 12, 16 };
@@ -65,31 +58,19 @@ void sequencer_init(void) {
 	dur_preset = 6;
 	index = 0;
 	step_countdown = 0;
-	voice_error = 0;
 	step_error = 0;
+	want_play = 0;
 	playing = 0;
 	clock_running = 0;
 }
 
-static UWORD voice_interval(void) {
-	ULONG base = E_CLOCK / VOICE_RATE;
-
-	voice_error += E_CLOCK % VOICE_RATE;
-	if (voice_error >= VOICE_RATE) {
-		voice_error -= VOICE_RATE;
-		base++;
-	}
-	if (base < 2)
-		base = 2;
-	return (UWORD)base;
-}
-
+/* Ticks per sixteenth note, spreading the remainder so the tempo is exact on
+   average. step_numer is the tick rate in millihertz times 15. */
 static UWORD step_interval(void) {
-	ULONG numer = VOICE_RATE * 15UL;
-	ULONG rate = bpm;
-	ULONG base = numer / rate;
+	ULONG rate = (ULONG)bpm * 1000UL;
+	ULONG base = step_numer / rate;
 
-	step_error += numer % rate;
+	step_error += step_numer % rate;
 	if (step_error >= rate) {
 		step_error -= rate;
 		base++;
@@ -97,26 +78,6 @@ static UWORD step_interval(void) {
 	if (base < 1)
 		base = 1;
 	return (UWORD)base;
-}
-
-static void silence_timer(void) {
-	ciab->ciacra = 0;
-	/* Drop every CIAB source. timer.device leaves timer B running, and that
-	   interrupt sticks the CPU if EXTER is enabled while Workbench is down. */
-	ciab->ciaicr = 0x7f;
-	(void)ciab->ciaicr;
-	custom->intreq = INTF_EXTER;
-	custom->intreq = INTF_EXTER;
-}
-
-static void arm_timer(UWORD ticks) {
-	UWORD latch = (UWORD)(ticks - 1);
-
-	ciab->ciacra = 0;
-	ciab->ciatalo = (UBYTE)latch;
-	ciab->ciatahi = (UBYTE)(latch >> 8);
-	ciab->ciacra = CIACRAF_LOAD;
-	ciab->ciacra = CIACRAF_START | CIACRAF_RUNMODE;
 }
 
 static SynthWave step_wave(const SeqStep *step) {
@@ -156,90 +117,90 @@ static void trigger_step(UWORD ticks) {
 	voice_trigger(step_wave(step), sequencer_sounding_note(step->note));
 }
 
-extern void sequencer_step_isr(void);
+static void begin_playback(void) {
+	UWORD ticks;
+
+	step_error = 0;
+	index = 0;
+	ticks = step_interval();
+	trigger_step(ticks);
+	step_countdown = ticks;
+}
+
+static void end_playback(void) {
+	index = 0;
+	gate_left = 0;
+	voice_release();
+	audio_stop();
+}
+
+static void advance_step(void) {
+	step_countdown--;
+	if (step_countdown == 0) {
+		UWORD ticks = step_interval();
+
+		index = (UWORD)((index + 1) % sequencer_length());
+		trigger_step(ticks);
+		step_countdown = ticks;
+	} else if (gate_left > 0) {
+		gate_left--;
+		if (gate_left == 0)
+			voice_release();
+	}
+	if (gate_left > 0) {
+		voice_set_wave(step_wave(&steps[index]));
+		voice_set_note(sequencer_sounding_note(steps[index].note));
+	}
+}
+
+extern void sequencer_tick_isr(void);
 
 /* Called from sequencer_isr.s. A C interrupt attribute emits an FPU
    save, and a plain A1200 traps that as a software failure. */
 __attribute__((used, externally_visible, noinline))
-void sequencer_step_service(void) {
-	UBYTE pending;
+void sequencer_tick_service(void) {
+	short started = 0;
 
-	(void)ciaa->ciaicr;
-	pending = ciab->ciaicr;
-	custom->intreq = INTF_EXTER;
-	custom->intreq = INTF_EXTER;
-	if (!(pending & CIAICRF_TA))
+	if (!(custom->intreqr & INTF_COPER))
 		return;
-	arm_timer(voice_interval());
-	if (playing) {
-		step_countdown--;
-		if (step_countdown == 0) {
-			UWORD ticks = step_interval();
-
-			index = (UWORD)((index + 1) % sequencer_length());
-			trigger_step(ticks);
-			step_countdown = ticks;
-		} else if (gate_left > 0) {
-			gate_left--;
-			if (gate_left == 0)
-				voice_release();
+	custom->intreq = INTF_COPER;
+	custom->intreq = INTF_COPER;
+	if (want_play != playing) {
+		playing = want_play;
+		if (playing) {
+			begin_playback();
+			started = 1;
+		} else {
+			end_playback();
 		}
-		if (gate_left > 0) {
-			voice_set_wave(step_wave(&steps[index]));
-			voice_set_note(sequencer_sounding_note(steps[index].note));
-		}
+	} else if (playing) {
+		advance_step();
 	}
 	voice_tick();
+	if (started)
+		audio_start();
 }
 
-static void begin_playback(void) {
-	step_error = 0;
-	index = 0;
-	{
-		UWORD ticks = step_interval();
-
-		trigger_step(ticks);
-		step_countdown = ticks;
-	}
-	voice_tick();
-	audio_start();
-	arm_timer(voice_interval());
-	ciab->ciaicr = CIAICRF_SETCLR | CIAICRF_TA;
-	custom->intena = INTF_SETCLR | INTF_INTEN | INTF_EXTER;
-}
-
-short sequencer_playing(void) { return playing; }
+short sequencer_playing(void) { return want_play; }
 
 void sequencer_toggle_play(void) {
-	if (!clock_running)
-		return;
-	if (playing) {
-		playing = 0;
-		index = 0;
-		voice_release();
-		audio_stop();
-	} else {
-		playing = 1;
-		begin_playback();
-	}
+	if (clock_running)
+		want_play = want_play ? 0 : 1;
 }
 
 void sequencer_clock_start(void) {
-	silence_timer();
-	saved_exter = system_swap_exter((APTR)sequencer_step_isr);
+	step_numer = system_video()->frame_mhz * CLOCK_TICKS_PER_FRAME * 15UL;
+	playing = 0;
 	clock_running = 1;
-	if (playing)
-		begin_playback();
+	system_ticks_on(sequencer_tick_isr);
 }
 
 void sequencer_clock_stop(void) {
 	if (!clock_running)
 		return;
+	system_ticks_off();
+	want_play = 0;
 	playing = 0;
-	custom->intena = INTF_EXTER;
-	silence_timer();
-	system_swap_exter(saved_exter);
-	ciab->ciaicr = CIAICRF_SETCLR | CIAICRF_TB;
 	clock_running = 0;
 }
 

@@ -4,6 +4,8 @@
 #include <hardware/custom.h>
 #include <hardware/dmabits.h>
 
+#define AUDIO_DMA (DMAF_AUD0 | DMAF_AUD1 | DMAF_AUD2 | DMAF_AUD3)
+
 extern volatile struct Custom *custom;
 
 static const void *current_wave[2];
@@ -24,6 +26,8 @@ static void write_pair(int index, int left, int right, const void *wave, UWORD p
 
 	if (volume > SYNTH_MAX_VOLUME)
 		volume = SYNTH_MAX_VOLUME;
+	if (period < SYNTH_MIN_PERIOD)
+		period = SYNTH_MIN_PERIOD;
 	if (samples < 2)
 		samples = 2;
 	if (!wave)
@@ -44,17 +48,11 @@ void audio_init(const void *wave_a, const void *wave_b, UWORD period, UWORD samp
 	write_pair(1, 3, 2, wave_b, period, samples, 0);
 }
 
+/* Paula's audio registers are write-only. Reading one latches whatever is on
+   the chip bus into it, so every value comes from write_pair. */
 void audio_start(void) {
-	if (custom->aud[0].ac_per < SYNTH_MIN_PERIOD)
-		custom->aud[0].ac_per = SYNTH_MIN_PERIOD;
-	if (custom->aud[1].ac_per < SYNTH_MIN_PERIOD)
-		custom->aud[1].ac_per = SYNTH_MIN_PERIOD;
-	if (custom->aud[2].ac_per < SYNTH_MIN_PERIOD)
-		custom->aud[2].ac_per = SYNTH_MIN_PERIOD;
-	if (custom->aud[3].ac_per < SYNTH_MIN_PERIOD)
-		custom->aud[3].ac_per = SYNTH_MIN_PERIOD;
-	custom->dmacon = DMAF_AUD0 | DMAF_AUD1 | DMAF_AUD2 | DMAF_AUD3;
-	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_AUD0 | DMAF_AUD1 | DMAF_AUD2 | DMAF_AUD3;
+	custom->dmacon = AUDIO_DMA;
+	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | AUDIO_DMA;
 }
 
 void audio_update(const void *wave_a, UWORD period_a, UWORD samples_a, UBYTE volume_a,
@@ -68,7 +66,7 @@ void audio_stop(void) {
 	custom->aud[1].ac_vol = 0;
 	custom->aud[2].ac_vol = 0;
 	custom->aud[3].ac_vol = 0;
-	custom->dmacon = DMAF_AUD0 | DMAF_AUD1 | DMAF_AUD2 | DMAF_AUD3;
+	custom->dmacon = AUDIO_DMA;
 	current_wave[0] = 0;
 	current_wave[1] = 0;
 }

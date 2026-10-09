@@ -161,7 +161,10 @@ static void edit_pattern(void) {
 int main(void) {
 	const SeqStep *steps;
 
-	system_init();
+	if (!system_init()) {
+		system_shutdown();
+		return 0;
+	}
 	sequencer_init();
 	if (!synth_init() || !display_init()) {
 		synth_shutdown();

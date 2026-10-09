@@ -1,6 +1,7 @@
 #include "display.h"
 #include "config.h"
 #include "synth.h"
+#include "system.h"
 #include "voice.h"
 
 #include "support/gcc8_c_support.h"
@@ -8,6 +9,7 @@
 #include <proto/exec.h>
 #include <hardware/custom.h>
 #include <hardware/dmabits.h>
+#include <hardware/intbits.h>
 
 extern struct ExecBase *SysBase;
 extern volatile struct Custom *custom;
@@ -357,10 +359,36 @@ static UWORD *cop_move(UWORD *list, ULONG reg, UWORD value) {
 	return list;
 }
 
+static UWORD *cop_wait(UWORD *list, UWORD line, UWORD hpos) {
+	*list++ = (UWORD)(((line & 0xff) << 8) | (hpos & 0xfe) | 1);
+	*list++ = 0xfffe;
+	return list;
+}
+
+/* The sequencer clock: evenly spaced copper interrupts down the frame. The
+   copper only compares 8 line bits, so lines past 255 need the wrap wait. */
+static UWORD *cop_ticks(UWORD *list) {
+	UWORD lines = system_video()->lines;
+	short wrapped = 0;
+
+	for (UWORD i = 0; i < CLOCK_TICKS_PER_FRAME; i++) {
+		UWORD line = (UWORD)(((ULONG)i * lines) / CLOCK_TICKS_PER_FRAME);
+
+		if (line > 255 && !wrapped) {
+			list = cop_wait(list, 255, 0xdf);
+			wrapped = 1;
+		}
+		if (line > 0)
+			list = cop_wait(list, line, 0x07);
+		list = cop_move(list, offsetof(struct Custom, intreq), INTF_SETCLR | INTF_COPER);
+	}
+	return list;
+}
+
 short display_init(void) {
 	planes[0] = AllocMem(SCREEN_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	planes[1] = AllocMem(SCREEN_BYTES, MEMF_CHIP | MEMF_CLEAR);
-	copper = AllocMem(64 * sizeof(UWORD), MEMF_CHIP | MEMF_CLEAR);
+	copper = AllocMem(COPPER_WORDS * sizeof(UWORD), MEMF_CHIP | MEMF_CLEAR);
 	bitplane = planes[0];
 	front = 0;
 	if (!planes[0] || !planes[1] || !copper) {
@@ -376,7 +404,7 @@ void display_shutdown(void) {
 	if (planes[1])
 		FreeMem(planes[1], SCREEN_BYTES);
 	if (copper)
-		FreeMem(copper, 64 * sizeof(UWORD));
+		FreeMem(copper, COPPER_WORDS * sizeof(UWORD));
 	planes[0] = 0;
 	planes[1] = 0;
 	bitplane = 0;
@@ -386,8 +414,8 @@ void display_shutdown(void) {
 }
 
 void display_start(void) {
-	const UWORD x = 129;
-	const UWORD y = 44;
+	const UWORD x = DISPLAY_LEFT;
+	const UWORD y = DISPLAY_TOP;
 	const UWORD res = 8;
 	UWORD xstop = x + SCREEN_WIDTH;
 	UWORD ystop = y + SCREEN_HEIGHT;
@@ -414,6 +442,7 @@ void display_start(void) {
 	cop_plane_lo = list - 1;
 	list = cop_move(list, offsetof(struct Custom, color[0]), 0x112);
 	list = cop_move(list, offsetof(struct Custom, color[1]), 0x6cf);
+	list = cop_ticks(list);
 	*list++ = 0xffff;
 	*list++ = 0xfffe;
 

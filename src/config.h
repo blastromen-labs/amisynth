@@ -84,3 +84,21 @@
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 256
 #define SCREEN_BYTES ((SCREEN_WIDTH / 8) * SCREEN_HEIGHT)
+
+/* Top-left corner of the picture on the beam, in lowres pixels and lines. */
+#define DISPLAY_LEFT 129
+#define DISPLAY_TOP 44
+
+/* Non-interlaced beam: lines per frame and frames per 1000 seconds.
+   PAL is 313 lines of 227 colour clocks, NTSC 263 lines of 227.5. */
+#define VIDEO_PAL_LINES 313
+#define VIDEO_PAL_FRAME_MHZ 49920UL
+#define VIDEO_NTSC_LINES 263
+#define VIDEO_NTSC_FRAME_MHZ 59826UL
+
+/* The copper raises this many evenly spaced sequencer ticks per frame. */
+#define CLOCK_TICKS_PER_FRAME 4
+/* Setup moves, a wait and an interrupt per tick, the line-255 wait and the end. */
+#define COPPER_WORDS (32 + CLOCK_TICKS_PER_FRAME * 4)
+/* Beam polls before a frame wait gives up. */
+#define BEAM_WAIT_POLLS 400000UL

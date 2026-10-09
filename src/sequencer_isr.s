@@ -1,9 +1,9 @@
 	.text
-	.globl sequencer_step_isr
-	.type sequencer_step_isr, function
-sequencer_step_isr:
+	.globl sequencer_tick_isr
+	.type sequencer_tick_isr, function
+sequencer_tick_isr:
 	movem.l d0-d1/a0-a1,sp@-
-	jsr sequencer_step_service
+	jsr sequencer_tick_service
 	movem.l sp@+,d0-d1/a0-a1
 	rte
-	.size sequencer_step_isr, .-sequencer_step_isr
+	.size sequencer_tick_isr, .-sequencer_tick_isr

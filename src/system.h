@@ -2,11 +2,18 @@
 
 #include <exec/types.h>
 
-void system_init(void);
+typedef struct {
+	UWORD lines;
+	ULONG frame_mhz;
+} VideoTiming;
+
+short system_init(void);
 void system_shutdown(void);
 void system_take(void);
 void system_free(void);
-APTR system_swap_exter(APTR handler);
+const VideoTiming *system_video(void);
+void system_ticks_on(void (*handler)(void));
+void system_ticks_off(void);
 
 void system_wait_vbl(void);
 void system_mouse_update(void);
