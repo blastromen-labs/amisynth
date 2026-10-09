@@ -13,8 +13,8 @@ static volatile UBYTE controls[VOICE_CONTROL_COUNT] = {
 	255, 0, 4, 48, 255, 72, 0,
 	128, 114, 0, 0, 23, 96
 };
-static SynthWave wave = SYNTH_WAVE_SINE;
-static SynthWave wave2 = SYNTH_WAVE_SINE;
+static SynthWave wave = SYNTH_WAVE_PULSE;
+static SynthWave wave2 = SYNTH_WAVE_SAW;
 static UWORD note = 24;
 static UBYTE route_pw = 1;
 static UBYTE route_pitch;
@@ -45,8 +45,13 @@ typedef struct {
 
 static Rendered rendered[2];
 static UBYTE render_hold;
-static volatile UBYTE audition_custom;
 static volatile UWORD lfo_phase[2];
+
+static SynthWave valid_wave(SynthWave next) {
+	if (next < 0 || next >= SYNTH_WAVE_COUNT)
+		return SYNTH_WAVE_SAW;
+	return next;
+}
 
 static UWORD time_ticks(UBYTE knob) {
 	return (UWORD)(1 + ((unsigned)knob * knob) / 163);
@@ -205,10 +210,10 @@ void voice_init(void) {
 	filt.level = 0;
 	filt.stage = ENV_IDLE;
 	note = 24;
-	wave = SYNTH_WAVE_SINE;
-	wave2 = SYNTH_WAVE_SINE;
-	synth_render(wave, note, cutoff, controls[VOICE_RESONANCE], pulse, synth_voice());
-	synth_render(wave2, note, cutoff, controls[VOICE_RESONANCE], pulse, synth_voice2());
+	wave = SYNTH_WAVE_PULSE;
+	wave2 = SYNTH_WAVE_SAW;
+	synth_render(wave, 0, note, cutoff, controls[VOICE_RESONANCE], pulse, synth_voice());
+	synth_render(wave2, 1, note, cutoff, controls[VOICE_RESONANCE], pulse, synth_voice2());
 	for (int i = 0; i < 2; i++) {
 		rendered[i].wave = 0xff;
 		rendered[i].note = (UBYTE)note;
@@ -234,11 +239,9 @@ UBYTE voice_get(UBYTE control) {
 }
 
 void voice_trigger(SynthWave next, UWORD next_note) {
-	if (next < 0 || next >= SYNTH_WAVE_COUNT)
-		next = SYNTH_WAVE_SINE;
 	if (next_note >= SYNTH_NOTE_COUNT)
 		next_note = SYNTH_NOTE_COUNT - 1;
-	wave = next;
+	wave = valid_wave(next);
 	note = next_note;
 	note_held = 1;
 	start_stage(&amp, ENV_ATTACK, ENV_PEAK, time_ticks(controls[VOICE_ATTACK]));
@@ -246,9 +249,7 @@ void voice_trigger(SynthWave next, UWORD next_note) {
 }
 
 void voice_set_wave(SynthWave next) {
-	if (next < 0 || next >= SYNTH_WAVE_COUNT)
-		next = SYNTH_WAVE_SINE;
-	wave = next;
+	wave = valid_wave(next);
 }
 
 void voice_set_note(UWORD next_note) {
@@ -257,12 +258,12 @@ void voice_set_note(UWORD next_note) {
 	note = next_note;
 }
 
-void voice_audition_custom(short on) {
-	audition_custom = on ? 1 : 0;
+void voice_set_osc2(SynthWave next) {
+	wave2 = valid_wave(next);
 }
 
 void voice_cycle_osc2(void) {
-	wave2 = (SynthWave)((wave2 + 1) % SYNTH_WAVE_COUNT);
+	voice_set_osc2((SynthWave)((wave2 + 1) % SYNTH_WAVE_COUNT));
 }
 
 UBYTE voice_osc2(void) {
@@ -391,13 +392,13 @@ static UWORD note_with_samples(UWORD preferred, UWORD samples) {
 
 static int render_osc(int index, SynthWave sounding, UWORD render_note, UBYTE cutoff, UBYTE pulse, BYTE *dest, short audible) {
 	UBYTE resonance = controls[VOICE_RESONANCE];
-	UWORD gen = synth_custom_generation();
+	UWORD gen = synth_custom_generation((UBYTE)index);
 	Rendered *state = &rendered[index];
 	short open = cutoff >= 250 && resonance == 0;
 	short note_changed = state->note != (UBYTE)render_note;
 	short same_length = synth_note_samples(state->note) == synth_note_samples(render_note);
 	short cutoff_moved = state->cutoff != cutoff;
-	short pulse_moved = sounding == SYNTH_WAVE_SQUARE && state->pulse != pulse;
+	short pulse_moved = synth_wave_has_width(sounding) && state->pulse != pulse;
 	short moved = cutoff_moved || pulse_moved;
 	/* An open filter copies the source. The same wave and length is the same buffer. */
 	short force = !state->audible || state->wave != (UBYTE)sounding ||
@@ -414,7 +415,7 @@ static int render_osc(int index, SynthWave sounding, UWORD render_note, UBYTE cu
 		state->note = (UBYTE)render_note;
 	if (!(force || (moved && render_hold == 0)))
 		return moved ? 2 : 0;
-	synth_render(sounding, render_note, cutoff, resonance, pulse, dest);
+	synth_render(sounding, (UBYTE)index, render_note, cutoff, resonance, pulse, dest);
 	state->wave = (UBYTE)sounding;
 	state->note = (UBYTE)render_note;
 	state->cutoff = cutoff;
@@ -425,7 +426,7 @@ static int render_osc(int index, SynthWave sounding, UWORD render_note, UBYTE cu
 }
 
 void voice_tick(void) {
-	SynthWave sounding = audition_custom ? SYNTH_WAVE_CUSTOM : wave;
+	SynthWave sounding = wave;
 	UBYTE cutoff = cutoff_step(shaped_cutoff());
 	UBYTE pulse = pulse_high_count();
 	int tune = voice_osc2_semitone() * 100 + voice_osc2_fine();
@@ -464,7 +465,8 @@ void voice_tick(void) {
 		shifted = SYNTH_NOTE_COUNT - 1;
 	note2 = note_with_samples((UWORD)shifted, samples2);
 
-	if (mix2 > 0 && sounding == wave2 && note2 == note && samples2 == samples) {
+	/* The custom waves differ per oscillator, so they never share a buffer. */
+	if (mix2 > 0 && sounding == wave2 && sounding != SYNTH_WAVE_CUSTOM && note2 == note && samples2 == samples) {
 		int status = render_osc(0, sounding, note, cutoff, pulse, buf1, 1);
 
 		rendered[1] = rendered[0];

@@ -37,7 +37,7 @@ UBYTE voice_get(UBYTE control);
 void voice_trigger(SynthWave wave, UWORD note);
 void voice_set_wave(SynthWave wave);
 void voice_set_note(UWORD note);
-void voice_audition_custom(short on);
+void voice_set_osc2(SynthWave wave);
 void voice_cycle_osc2(void);
 UBYTE voice_osc2(void);
 int voice_osc2_semitone(void);

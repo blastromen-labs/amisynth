@@ -16,6 +16,8 @@ void display_start(void);
 void display_flip(void);
 void display_set_view(UBYTE view);
 UBYTE display_view(void);
+UBYTE display_draw_osc(void);
+void display_cycle_draw_osc(void);
 void display_frame(const SeqStep *steps, UWORD current, UWORD bpm, WORD mouse_x, WORD mouse_y, UBYTE volume);
 
 static inline int draw_plot_half(void) {

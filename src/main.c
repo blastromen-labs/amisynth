@@ -12,7 +12,16 @@ static short in_plot(int x, int y) {
 	return x >= DRAW_PLOT_LEFT && x < DRAW_PLOT_RIGHT && y >= DRAW_TOP && y < DRAW_BOTTOM;
 }
 
-static void paint_custom(int x, int y, short fresh) {
+/* An edited custom wave becomes that oscillator's wave, so it is heard at
+   once and stays after leaving the draw view. */
+static void use_custom_wave(UBYTE osc) {
+	if (osc == 0)
+		sequencer_set_osc1_wave(SYNTH_WAVE_CUSTOM);
+	else
+		voice_set_osc2(SYNTH_WAVE_CUSTOM);
+}
+
+static void paint_custom(UBYTE osc, int x, int y, short fresh) {
 	static int last = -1;
 	static int last_value;
 	int sample = draw_sample_from_x(x);
@@ -21,7 +30,7 @@ static void paint_custom(int x, int y, short fresh) {
 	if (fresh)
 		last = -1;
 	if (last < 0 || last == sample) {
-		synth_custom_set((UWORD)sample, value);
+		synth_custom_set(osc, (UWORD)sample, value);
 	} else {
 		int from = last;
 		int count = sample - from;
@@ -33,7 +42,7 @@ static void paint_custom(int x, int y, short fresh) {
 		}
 		for (int i = 0; i <= count; i++) {
 			int blended = last_value + ((value - last_value) * i) / count;
-			synth_custom_set((UWORD)(from + dir * i), blended);
+			synth_custom_set(osc, (UWORD)(from + dir * i), blended);
 		}
 	}
 	last = sample;
@@ -52,6 +61,7 @@ static void edit_pattern(void) {
 	static short painting;
 	short clicked = left && !previous_left;
 	short began = 0;
+	UBYTE draw_osc = display_draw_osc();
 
 	if (left && right) {
 		previous_left = left;
@@ -64,18 +74,19 @@ static void edit_pattern(void) {
 	if (clicked && y >= SEQ_TAB_TOP && y < SEQ_TAB_BOTTOM) {
 		if (x >= SEQ_TAB_SEQ_LEFT && x < SEQ_TAB_SEQ_RIGHT) {
 			display_set_view(DISPLAY_SEQUENCE);
-			voice_audition_custom(0);
 			clicked = 0;
 		} else if (x >= SEQ_TAB_DRAW_LEFT && x < SEQ_TAB_DRAW_RIGHT) {
 			display_set_view(DISPLAY_DRAW);
-			voice_audition_custom(1);
 			clicked = 0;
 		} else if (x >= SEQ_TAB_SYNTH_LEFT && x < SEQ_TAB_SYNTH_RIGHT) {
 			display_set_view(DISPLAY_SYNTH);
-			voice_audition_custom(0);
 			clicked = 0;
 		} else if (display_view() == DISPLAY_DRAW && x >= SEQ_TAB_PRESET_LEFT && x < SEQ_TAB_PRESET_RIGHT) {
-			synth_cycle_preset();
+			synth_cycle_preset(draw_osc);
+			use_custom_wave(draw_osc);
+			clicked = 0;
+		} else if (display_view() == DISPLAY_DRAW && x >= DRAW_OSC_LEFT && x < DRAW_OSC_RIGHT) {
+			display_cycle_draw_osc();
 			clicked = 0;
 		} else if (display_view() == DISPLAY_SEQUENCE && x >= SEQ_TAB_PRESET_LEFT && x < SEQ_TAB_PRESET_RIGHT) {
 			sequencer_toggle_edit();
@@ -113,9 +124,11 @@ static void edit_pattern(void) {
 		control_grab = slot;
 
 	if (painting) {
-		paint_custom(x, y, began);
+		paint_custom(draw_osc, x, y, began);
+		use_custom_wave(draw_osc);
 	} else if (display_view() == DISPLAY_DRAW && right && !previous_right && in_plot(x, y)) {
-		synth_custom_reset();
+		synth_custom_reset(draw_osc);
+		use_custom_wave(draw_osc);
 	} else if (left && control_grab >= 0 &&
 		!(control_grab == VOICE_OSC2_SEMI && synth_semi_step(x, y)) &&
 		!(control_grab == VOICE_OSC2_FINE && synth_fine_step(x, y))) {

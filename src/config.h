@@ -35,6 +35,9 @@
 #define SEQ_WAVE_MODE_RIGHT 268
 #define SEQ_DUR_LEFT 272
 #define SEQ_DUR_RIGHT 318
+/* Draw view tab that picks which oscillator's custom wave is edited. */
+#define DRAW_OSC_LEFT SEQ_WAVE_MODE_LEFT
+#define DRAW_OSC_RIGHT SEQ_WAVE_MODE_RIGHT
 #define SYNTH_ROW1_COLUMNS 9
 #define SYNTH_ROW2_COLUMNS 7
 #define SYNTH_ROW3_COLUMNS 6
