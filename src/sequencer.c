@@ -15,7 +15,7 @@ static volatile UWORD bpm = SEQUENCER_BPM_DEFAULT;
 static volatile UWORD index;
 static UBYTE length_index = 5;
 static UBYTE octave_index = 1;
-static UBYTE global_wave = SYNTH_WAVE_SQUARE;
+static UBYTE global_wave = SYNTH_WAVE_PULSE;
 static UBYTE per_step;
 static UBYTE edit_dur;
 static UBYTE dur_preset = 6;
@@ -37,10 +37,10 @@ void sequencer_init(void) {
 		45, 48, 43, 40, 36, 40, 45, 48
 	};
 	static const UBYTE waves[SEQUENCER_STEPS] = {
-		SYNTH_WAVE_SQUARE, SYNTH_WAVE_SQUARE, SYNTH_WAVE_SQUARE, SYNTH_WAVE_SQUARE,
-		SYNTH_WAVE_SQUARE, SYNTH_WAVE_TRIANGLE, SYNTH_WAVE_SAW, SYNTH_WAVE_SINE,
-		SYNTH_WAVE_SQUARE, SYNTH_WAVE_SAW, SYNTH_WAVE_TRIANGLE, SYNTH_WAVE_SINE,
-		SYNTH_WAVE_SQUARE, SYNTH_WAVE_TRIANGLE, SYNTH_WAVE_SAW, SYNTH_WAVE_SINE
+		SYNTH_WAVE_PULSE, SYNTH_WAVE_PULSE, SYNTH_WAVE_PULSE, SYNTH_WAVE_PULSE,
+		SYNTH_WAVE_PULSE, SYNTH_WAVE_TRIANGLE, SYNTH_WAVE_SAW, SYNTH_WAVE_REVERSE_SAW,
+		SYNTH_WAVE_SQUARE, SYNTH_WAVE_SAW, SYNTH_WAVE_TRIANGLE, SYNTH_WAVE_REVERSE_SAW,
+		SYNTH_WAVE_PULSE, SYNTH_WAVE_TRIANGLE, SYNTH_WAVE_SAW, SYNTH_WAVE_REVERSE_SAW
 	};
 
 	for (UWORD i = 0; i < SEQUENCER_STEPS; i++) {
@@ -52,7 +52,7 @@ void sequencer_init(void) {
 	bpm = SEQUENCER_BPM_DEFAULT;
 	length_index = 1;
 	octave_index = 1;
-	global_wave = SYNTH_WAVE_SQUARE;
+	global_wave = SYNTH_WAVE_PULSE;
 	per_step = 0;
 	edit_dur = 0;
 	dur_preset = 6;
@@ -344,16 +344,24 @@ void sequencer_randomize(UWORD salt) {
 	}
 }
 
-void sequencer_cycle_all_waves(void) {
-	UBYTE next;
+/* OSC1 plays the global wave, or each step's own wave in per-step mode. */
+UBYTE sequencer_osc1_wave(void) {
+	return per_step ? steps[0].wave : global_wave;
+}
 
+void sequencer_set_osc1_wave(UBYTE wave) {
+	if (wave >= SYNTH_WAVE_COUNT)
+		return;
 	if (!per_step) {
-		global_wave = (UBYTE)((global_wave + 1) % SYNTH_WAVE_COUNT);
+		global_wave = wave;
 		return;
 	}
-	next = (UBYTE)((steps[0].wave + 1) % SYNTH_WAVE_COUNT);
 	for (UWORD i = 0; i < sequencer_length(); i++)
-		steps[i].wave = next;
+		steps[i].wave = wave;
+}
+
+void sequencer_cycle_all_waves(void) {
+	sequencer_set_osc1_wave((UBYTE)((sequencer_osc1_wave() + 1) % SYNTH_WAVE_COUNT));
 }
 
 void sequencer_toggle_wave_mode(void) {

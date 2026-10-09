@@ -32,6 +32,8 @@ void sequencer_cycle_dur(void);
 UBYTE sequencer_dur_preset(void);
 void sequencer_cycle_wave(UWORD step);
 void sequencer_cycle_all_waves(void);
+UBYTE sequencer_osc1_wave(void);
+void sequencer_set_osc1_wave(UBYTE wave);
 void sequencer_toggle_wave_mode(void);
 short sequencer_per_step(void);
 UBYTE sequencer_global_wave(void);

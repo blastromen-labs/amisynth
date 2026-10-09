@@ -16,63 +16,68 @@ static const ULONG note_hz_q8[SYNTH_NOTE_COUNT] = {
 };
 
 static const char *wave_names[SYNTH_WAVE_COUNT] = {
-	"sine", "triangle", "saw", "square",
-	"exact saw", "exact square", "exact triangle", "exact pulse",
-	"custom"
+	"saw", "reverse saw", "square", "pulse", "triangle", "custom"
 };
 
-static const BYTE sine[SYNTH_WAVE_LEN] = {
+/* Drawing templates, one per fixed wave. */
+static const char *preset_names[SYNTH_WAVE_CUSTOM] = { "SAW", "RSAW", "SQR", "PLS", "TRI" };
+
+/* A fresh or reset custom wave starts as a sine. */
+static const BYTE custom_start[SYNTH_WAVE_LEN] = {
 	0, 21, 42, 61, 78, 91, 102, 108,
 	110, 108, 102, 91, 78, 61, 42, 21,
 	0, -21, -42, -61, -78, -91, -102, -108,
 	-110, -108, -102, -91, -78, -61, -42, -21
 };
 
+/* The fixed waves, then one custom wave per oscillator. */
+#define WAVE_TABLES (SYNTH_WAVE_CUSTOM + SYNTH_OSC_COUNT)
+
 static BYTE *waves;
 static BYTE *output;
 static BYTE *output2;
-static volatile UWORD custom_gen;
+static volatile UWORD custom_gen[SYNTH_OSC_COUNT];
+static UBYTE preset_index[SYNTH_OSC_COUNT];
+static UBYTE preset_loaded[SYNTH_OSC_COUNT];
 
-enum {
-	PRESET_SAW = 0,
-	PRESET_SQUARE,
-	PRESET_TRIANGLE,
-	PRESET_PULSE,
-	PRESET_COUNT
-};
-
-static const char *preset_names[PRESET_COUNT] = { "SAW", "SQR", "TRI", "PLS" };
-static UBYTE preset_index;
-static UBYTE preset_loaded;
-
-static int preset_sample(int preset, int i) {
+static int fixed_sample(SynthWave wave, int i) {
 	const int amp = SYNTH_AMPLITUDE;
 	const int len = SYNTH_WAVE_LEN;
 	const int half = len / 2;
 
-	if (preset == PRESET_SAW)
-		return -amp + (2 * amp * i) / (len - 1);
-	if (preset == PRESET_SQUARE)
+	switch (wave) {
+	case SYNTH_WAVE_REVERSE_SAW:
+		return amp - (2 * amp * i) / (len - 1);
+	case SYNTH_WAVE_SQUARE:
 		return i < half ? amp : -amp;
-	if (preset == PRESET_TRIANGLE) {
+	case SYNTH_WAVE_PULSE:
+		return i < len / 4 ? amp : -amp;
+	case SYNTH_WAVE_TRIANGLE:
 		if (i < half)
 			return -amp + (2 * amp * i) / half;
 		return amp - (2 * amp * (i - half)) / half;
+	case SYNTH_WAVE_SAW:
+	default:
+		return -amp + (2 * amp * i) / (len - 1);
 	}
-	return i < len / 4 ? amp : -amp;
 }
 
-static void write_exact(SynthWave wave, int preset) {
-	BYTE *dst = waves + (int)wave * SYNTH_WAVE_LEN;
+static BYTE *custom_table(UBYTE osc) {
+	if (osc >= SYNTH_OSC_COUNT)
+		osc = 0;
+	return waves + (SYNTH_WAVE_CUSTOM + osc) * SYNTH_WAVE_LEN;
+}
+
+static void custom_fill(UBYTE osc, const BYTE *src) {
+	BYTE *dst = custom_table(osc);
 
 	for (int i = 0; i < SYNTH_WAVE_LEN; i++)
-		dst[i] = (BYTE)preset_sample(preset, i);
+		dst[i] = src[i];
+	custom_gen[osc]++;
 }
 
 short synth_init(void) {
-	const int half = SYNTH_WAVE_LEN / 2;
-
-	waves = AllocMem(SYNTH_WAVE_COUNT * SYNTH_WAVE_LEN, MEMF_CHIP | MEMF_CLEAR);
+	waves = AllocMem(WAVE_TABLES * SYNTH_WAVE_LEN, MEMF_CHIP | MEMF_CLEAR);
 	output = AllocMem(SYNTH_WAVE_LEN, MEMF_CHIP | MEMF_CLEAR);
 	output2 = AllocMem(SYNTH_WAVE_LEN, MEMF_CHIP | MEMF_CLEAR);
 	if (!waves || !output || !output2) {
@@ -80,39 +85,18 @@ short synth_init(void) {
 		return 0;
 	}
 
-	for (int i = 0; i < SYNTH_WAVE_LEN; i++) {
-		int tri_phase = i < half ? i : SYNTH_WAVE_LEN - i;
-		waves[SYNTH_WAVE_SINE * SYNTH_WAVE_LEN + i] = sine[i];
-		waves[SYNTH_WAVE_TRIANGLE * SYNTH_WAVE_LEN + i] =
-			(BYTE)(-SYNTH_AMPLITUDE + (2 * SYNTH_AMPLITUDE * tri_phase) / half);
-		waves[SYNTH_WAVE_SAW * SYNTH_WAVE_LEN + i] =
-			(BYTE)(-SYNTH_AMPLITUDE + (2 * SYNTH_AMPLITUDE * i) / SYNTH_WAVE_LEN);
-		waves[SYNTH_WAVE_SQUARE * SYNTH_WAVE_LEN + i] =
-			(BYTE)(i < half ? SYNTH_AMPLITUDE : -SYNTH_AMPLITUDE);
+	for (int wave = 0; wave < SYNTH_WAVE_CUSTOM; wave++) {
+		for (int i = 0; i < SYNTH_WAVE_LEN; i++)
+			waves[wave * SYNTH_WAVE_LEN + i] = (BYTE)fixed_sample((SynthWave)wave, i);
 	}
-
-	for (int wave = 0; wave <= SYNTH_WAVE_SQUARE; wave++) {
-		BYTE *cycle = waves + wave * SYNTH_WAVE_LEN;
-		BYTE start = cycle[0];
-		for (int i = 0; i < 4; i++) {
-			int index = SYNTH_WAVE_LEN - 4 + i;
-			int toward = i + 1;
-			cycle[index] = (BYTE)((cycle[index] * (4 - toward) + start * toward) / 4);
-		}
-	}
-	write_exact(SYNTH_WAVE_EXACT_SAW, PRESET_SAW);
-	write_exact(SYNTH_WAVE_EXACT_SQUARE, PRESET_SQUARE);
-	write_exact(SYNTH_WAVE_EXACT_TRIANGLE, PRESET_TRIANGLE);
-	write_exact(SYNTH_WAVE_EXACT_PULSE, PRESET_PULSE);
-	for (int i = 0; i < SYNTH_WAVE_LEN; i++)
-		waves[SYNTH_WAVE_CUSTOM * SYNTH_WAVE_LEN + i] = waves[SYNTH_WAVE_SINE * SYNTH_WAVE_LEN + i];
-	custom_gen = 1;
+	for (UBYTE osc = 0; osc < SYNTH_OSC_COUNT; osc++)
+		synth_custom_reset(osc);
 	return 1;
 }
 
 void synth_shutdown(void) {
 	if (waves)
-		FreeMem(waves, SYNTH_WAVE_COUNT * SYNTH_WAVE_LEN);
+		FreeMem(waves, WAVE_TABLES * SYNTH_WAVE_LEN);
 	if (output)
 		FreeMem(output, SYNTH_WAVE_LEN);
 	if (output2)
@@ -125,63 +109,65 @@ void synth_shutdown(void) {
 BYTE *synth_voice(void) { return output; }
 BYTE *synth_voice2(void) { return output2; }
 
-const BYTE *synth_wave(SynthWave wave) {
-	if (wave < 0 || wave >= SYNTH_WAVE_COUNT)
-		wave = SYNTH_WAVE_SINE;
+const BYTE *synth_wave(SynthWave wave, UBYTE osc) {
+	if (!waves)
+		return 0;
+	if (wave == SYNTH_WAVE_CUSTOM)
+		return custom_table(osc);
+	if (wave < 0 || wave >= SYNTH_WAVE_CUSTOM)
+		wave = SYNTH_WAVE_SAW;
 	return waves + (wave * SYNTH_WAVE_LEN);
 }
 
-void synth_custom_set(UWORD index, int value) {
+void synth_custom_set(UBYTE osc, UWORD index, int value) {
 	BYTE *sample;
 
-	if (!waves || index >= SYNTH_WAVE_LEN)
+	if (!waves || osc >= SYNTH_OSC_COUNT || index >= SYNTH_WAVE_LEN)
 		return;
 	if (value > SYNTH_AMPLITUDE)
 		value = SYNTH_AMPLITUDE;
 	if (value < -SYNTH_AMPLITUDE)
 		value = -SYNTH_AMPLITUDE;
-	sample = waves + SYNTH_WAVE_CUSTOM * SYNTH_WAVE_LEN + index;
+	sample = custom_table(osc) + index;
 	if (*sample == (BYTE)value)
 		return;
 	*sample = (BYTE)value;
-	custom_gen++;
+	custom_gen[osc]++;
 }
 
-void synth_custom_reset(void) {
-	if (!waves)
+void synth_custom_reset(UBYTE osc) {
+	if (!waves || osc >= SYNTH_OSC_COUNT)
 		return;
-	for (int i = 0; i < SYNTH_WAVE_LEN; i++)
-		waves[SYNTH_WAVE_CUSTOM * SYNTH_WAVE_LEN + i] = waves[SYNTH_WAVE_SINE * SYNTH_WAVE_LEN + i];
-	preset_index = 0;
-	preset_loaded = 0;
-	custom_gen++;
+	custom_fill(osc, custom_start);
+	preset_index[osc] = 0;
+	preset_loaded[osc] = 0;
 }
 
-void synth_cycle_preset(void) {
-	BYTE *dst;
-
-	if (!waves)
+/* The first press loads the current template, later presses move to the next. */
+void synth_cycle_preset(UBYTE osc) {
+	if (!waves || osc >= SYNTH_OSC_COUNT)
 		return;
-	if (preset_loaded)
-		preset_index = (UBYTE)((preset_index + 1) % PRESET_COUNT);
-	dst = waves + SYNTH_WAVE_CUSTOM * SYNTH_WAVE_LEN;
-	for (int i = 0; i < SYNTH_WAVE_LEN; i++)
-		dst[i] = (BYTE)preset_sample(preset_index, i);
-	preset_loaded = 1;
-	custom_gen++;
+	if (preset_loaded[osc])
+		preset_index[osc] = (UBYTE)((preset_index[osc] + 1) % SYNTH_WAVE_CUSTOM);
+	custom_fill(osc, waves + preset_index[osc] * SYNTH_WAVE_LEN);
+	preset_loaded[osc] = 1;
 }
 
-const char *synth_preset_name(void) {
-	return preset_names[preset_index];
+const char *synth_preset_name(UBYTE osc) {
+	if (osc >= SYNTH_OSC_COUNT)
+		osc = 0;
+	return preset_names[preset_index[osc]];
 }
 
-UWORD synth_custom_generation(void) {
-	return custom_gen;
+UWORD synth_custom_generation(UBYTE osc) {
+	if (osc >= SYNTH_OSC_COUNT)
+		osc = 0;
+	return custom_gen[osc];
 }
 
 const char *synth_wave_name(SynthWave wave) {
 	if (wave < 0 || wave >= SYNTH_WAVE_COUNT)
-		return wave_names[0];
+		return wave_names[SYNTH_WAVE_SAW];
 	return wave_names[wave];
 }
 
@@ -332,9 +318,42 @@ static BYTE source_sample(const BYTE *src, int samples, int index) {
 	return src[index * (SYNTH_WAVE_LEN / samples)];
 }
 
-void synth_render(SynthWave wave, UWORD note, UBYTE cutoff, UBYTE resonance, UBYTE pulse_high, BYTE *dest) {
+static int clamp_width(int high) {
+	if (high < 1)
+		return 1;
+	if (high >= SYNTH_WAVE_LEN)
+		return SYNTH_WAVE_LEN - 1;
+	return high;
+}
+
+static void pulse_shape(int high, BYTE *dest) {
+	high = clamp_width(high);
+	for (int i = 0; i < SYNTH_WAVE_LEN; i++)
+		dest[i] = (BYTE)(i < high ? SYNTH_AMPLITUDE : -SYNTH_AMPLITUDE);
+}
+
+/* Pulse width on a drawn wave: the first half of the cycle is squeezed into
+   `high` samples and the second half into the rest, so the outline stays and
+   its midpoint moves. The centre width leaves the wave unchanged. */
+static void width_shape(const BYTE *src, int high, BYTE *dest) {
+	const int len = SYNTH_WAVE_LEN;
+	const int half = len / 2;
+
+	high = clamp_width(high);
+	for (int i = 0; i < len; i++) {
+		int pos = i < high ? (i * half * 256) / high : half * 256 + ((i - high) * half * 256) / (len - high);
+		int at = pos >> 8;
+		int frac = pos & 255;
+		int a = src[at % len];
+		int b = src[(at + 1) % len];
+
+		dest[i] = (BYTE)(a + ((b - a) * frac) / 256);
+	}
+}
+
+void synth_render(SynthWave wave, UBYTE osc, UWORD note, UBYTE cutoff, UBYTE resonance, UBYTE pulse_high, BYTE *dest) {
 	BYTE pulse[SYNTH_WAVE_LEN];
-	const BYTE *src = synth_wave(wave);
+	const BYTE *src = synth_wave(wave, osc);
 	int samples = synth_note_samples(note);
 	UWORD period = synth_note_period(note);
 	ULONG sr = SYNTH_PAULA_CLOCK / period;
@@ -350,15 +369,11 @@ void synth_render(SynthWave wave, UWORD note, UBYTE cutoff, UBYTE resonance, UBY
 
 	if (!dest || !src)
 		return;
-	if (wave == SYNTH_WAVE_SQUARE) {
-		int high = pulse_high;
-
-		if (high < 1)
-			high = 1;
-		if (high >= SYNTH_WAVE_LEN)
-			high = SYNTH_WAVE_LEN - 1;
-		for (int i = 0; i < SYNTH_WAVE_LEN; i++)
-			pulse[i] = (BYTE)(i < high ? SYNTH_AMPLITUDE : -SYNTH_AMPLITUDE);
+	if (wave == SYNTH_WAVE_PULSE) {
+		pulse_shape(pulse_high, pulse);
+		src = pulse;
+	} else if (wave == SYNTH_WAVE_CUSTOM) {
+		width_shape(src, pulse_high, pulse);
 		src = pulse;
 	}
 	if (cutoff >= 250 && resonance == 0) {

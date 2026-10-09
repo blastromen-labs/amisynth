@@ -21,6 +21,7 @@ static UWORD *cop_plane_hi;
 static UWORD *cop_plane_lo;
 static UBYTE front;
 static UBYTE view;
+static UBYTE draw_osc;
 
 static void plot(int x, int y) {
 	if ((unsigned)x >= SCREEN_WIDTH || (unsigned)y >= SCREEN_HEIGHT)
@@ -85,40 +86,24 @@ static int note_y(UBYTE note) {
 
 static void draw_wave_icon(int x, int y, UBYTE wave, int size) {
 	switch (wave) {
+	case SYNTH_WAVE_REVERSE_SAW:
+		line(x - size, y + size, x - size, y);
+		line(x - size, y, x + size - 1, y + size);
+		break;
+	case SYNTH_WAVE_SQUARE:
+	case SYNTH_WAVE_PULSE: {
+		int fall = wave == SYNTH_WAVE_PULSE ? x - size / 2 : x;
+
+		line(x - size, y + size, x - size, y);
+		line(x - size, y, fall, y);
+		line(fall, y, fall, y + size);
+		line(fall, y + size, x + size, y + size);
+		line(x + size, y + size, x + size, y);
+		break;
+	}
 	case SYNTH_WAVE_TRIANGLE:
 		line(x - size, y + size, x, y);
 		line(x, y, x + size, y + size);
-		break;
-	case SYNTH_WAVE_SAW:
-		line(x - size, y + size, x + size - 1, y);
-		line(x + size - 1, y, x + size - 1, y + size);
-		break;
-	case SYNTH_WAVE_SQUARE:
-		line(x - size, y + size, x - size, y);
-		line(x - size, y, x, y);
-		line(x, y, x, y + size);
-		line(x, y + size, x + size, y + size);
-		line(x + size, y + size, x + size, y);
-		break;
-	case SYNTH_WAVE_EXACT_SAW:
-		line(x - size, y + size, x + size - 1, y);
-		line(x + size - 1, y, x + size - 1, y + size);
-		line(x - size, y + size, x + size - 1, y + size);
-		break;
-	case SYNTH_WAVE_EXACT_SQUARE:
-		for (int dy = 0; dy <= size; dy += 2)
-			line(x - size, y + dy, x, y + dy);
-		line(x, y + size, x + size, y + size);
-		break;
-	case SYNTH_WAVE_EXACT_TRIANGLE:
-		line(x - size, y + size / 2, x - size / 2, y);
-		line(x - size / 2, y, x + size / 2, y + size);
-		line(x + size / 2, y + size, x + size, y + size / 2);
-		break;
-	case SYNTH_WAVE_EXACT_PULSE:
-		for (int dy = 0; dy <= size; dy += 2)
-			line(x - size, y + dy, x - size / 2, y + dy);
-		line(x - size / 2, y + size, x + size, y + size);
 		break;
 	case SYNTH_WAVE_CUSTOM:
 		line(x - size, y + size / 2, x - size / 2, y - size / 2);
@@ -126,12 +111,10 @@ static void draw_wave_icon(int x, int y, UBYTE wave, int size) {
 		line(x - size / 4, y + size / 2, x + size / 4, y - size / 4);
 		line(x + size / 4, y - size / 4, x + size, y + size / 2);
 		break;
-	case SYNTH_WAVE_SINE:
+	case SYNTH_WAVE_SAW:
 	default:
-		line(x - size, y + size / 2, x - size / 2, y);
-		line(x - size / 2, y, x, y + size / 2);
-		line(x, y + size / 2, x + size / 2, y + size);
-		line(x + size / 2, y + size, x + size, y + size / 2);
+		line(x - size, y + size, x + size - 1, y);
+		line(x + size - 1, y, x + size - 1, y + size);
 		break;
 	}
 }
@@ -462,6 +445,18 @@ UBYTE display_view(void) {
 	return view;
 }
 
+UBYTE display_draw_osc(void) {
+	return draw_osc;
+}
+
+void display_cycle_draw_osc(void) {
+	draw_osc = (UBYTE)((draw_osc + 1) % SYNTH_OSC_COUNT);
+}
+
+static UBYTE osc_wave(UBYTE osc) {
+	return osc == 0 ? sequencer_osc1_wave() : voice_osc2();
+}
+
 void display_flip(void) {
 	ULONG addr;
 
@@ -668,14 +663,13 @@ static void draw_wave_button(int column, int columns, const char *label, UBYTE w
 	draw_wave_icon(mid, icon_y, wave, icon_size);
 }
 
-static void draw_controls(const SeqStep *steps) {
+static void draw_controls(void) {
 	static const char *amp_labels[] = { "ATK", "DEC", "SUS", "REL", "MIX" };
 	static const char *filter_labels[] = { "CUTOFF", "RESON", "F-ATK", "F-DEC", "F-SUS", "F-REL", "FENV" };
 	static const char *rate_labels[] = { "LFO1", "LFO2" };
 	static const UBYTE depth_controls[] = { VOICE_PW_DEPTH, VOICE_PITCH_DEPTH, VOICE_FILTER_DEPTH };
 	char semitone[5];
 	char fine[5];
-	UBYTE shown_wave = sequencer_per_step() ? steps[0].wave : sequencer_global_wave();
 
 	format_signed(semitone, voice_osc2_semitone());
 	format_signed(fine, voice_osc2_fine());
@@ -698,9 +692,9 @@ static void draw_controls(const SeqStep *steps) {
 
 		draw_step_buttons(left, right, SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM - 1);
 	}
-	draw_wave_button(VOICE_OSC2_FINE + 1, SYNTH_ROW1_COLUMNS, "OSC1", shown_wave, SYNTH_ROW1_TOP,
+	draw_wave_button(VOICE_OSC2_FINE + 1, SYNTH_ROW1_COLUMNS, "OSC1", osc_wave(0), SYNTH_ROW1_TOP,
 		SYNTH_OSC_BUTTON_BOTTOM, SYNTH_ROW1_TOP + 22, 8);
-	draw_wave_button(VOICE_OSC2_FINE + 2, SYNTH_ROW1_COLUMNS, "OSC2", voice_osc2(), SYNTH_ROW1_TOP,
+	draw_wave_button(VOICE_OSC2_FINE + 2, SYNTH_ROW1_COLUMNS, "OSC2", osc_wave(1), SYNTH_ROW1_TOP,
 		SYNTH_OSC_BUTTON_BOTTOM, SYNTH_ROW1_TOP + 22, 8);
 	{
 		int left = ((VOICE_OSC2_FINE + 1) * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS;
@@ -741,8 +735,12 @@ static void draw_tabs(void) {
 	draw_tab(SEQ_TAB_SEQ_LEFT, SEQ_TAB_SEQ_RIGHT, "SEQ", view == DISPLAY_SEQUENCE);
 	draw_tab(SEQ_TAB_DRAW_LEFT, SEQ_TAB_DRAW_RIGHT, "DRAW", view == DISPLAY_DRAW);
 	draw_tab(SEQ_TAB_SYNTH_LEFT, SEQ_TAB_SYNTH_RIGHT, "SYN", view == DISPLAY_SYNTH);
-	if (view == DISPLAY_DRAW)
-		draw_tab(SEQ_TAB_PRESET_LEFT, SEQ_TAB_PRESET_RIGHT, synth_preset_name(), 0);
+	if (view == DISPLAY_DRAW) {
+		/* The oscillator tab is highlighted while that oscillator plays its custom wave. */
+		draw_tab(SEQ_TAB_PRESET_LEFT, SEQ_TAB_PRESET_RIGHT, synth_preset_name(draw_osc), 0);
+		draw_tab(DRAW_OSC_LEFT, DRAW_OSC_RIGHT, draw_osc == 0 ? "OSC1" : "OSC2",
+			osc_wave(draw_osc) == SYNTH_WAVE_CUSTOM);
+	}
 	if (view == DISPLAY_SEQUENCE) {
 		char text[4];
 
@@ -756,7 +754,7 @@ static void draw_tabs(void) {
 }
 
 static void draw_oscillator(void) {
-	const BYTE *wave = synth_wave(SYNTH_WAVE_CUSTOM);
+	const BYTE *wave = synth_wave(SYNTH_WAVE_CUSTOM, draw_osc);
 	int top = DRAW_TOP;
 	int bottom = DRAW_BOTTOM - 1;
 	int mid = draw_y_from_value(0);
@@ -789,7 +787,7 @@ void display_frame(const SeqStep *steps, UWORD current, UWORD bpm, WORD mouse_x,
 	if (view == DISPLAY_DRAW)
 		draw_oscillator();
 	else if (view == DISPLAY_SYNTH)
-		draw_controls(steps);
+		draw_controls();
 	else
 		draw_steps(steps, current, mouse_x, mouse_y);
 	draw_tabs();
