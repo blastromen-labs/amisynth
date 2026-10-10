@@ -1,5 +1,7 @@
 #include "display.h"
 #include "config.h"
+#include "fx.h"
+#include "panel.h"
 #include "synth.h"
 #include "system.h"
 #include "voice.h"
@@ -435,7 +437,7 @@ void display_start(void) {
 }
 
 void display_set_view(UBYTE next) {
-	if (next == DISPLAY_DRAW || next == DISPLAY_SYNTH)
+	if (next == DISPLAY_DRAW || next == DISPLAY_SYNTH || next == DISPLAY_FX)
 		view = next;
 	else
 		view = DISPLAY_SEQUENCE;
@@ -608,10 +610,10 @@ static void draw_step_buttons(int left, int right, int top, int bottom) {
 	draw_centered((mid + right) / 2, top + 3, "+");
 }
 
-static void draw_fader_box(int left, int right, int control, const char *label, const char *readout, short bipolar,
-	int panel_top, int panel_bottom, int track_top, int track_bottom) {
+/* `live` marks where modulation has moved the value, or is negative for none. */
+static void draw_fader_box(int left, int right, UBYTE value, int live, const char *label, const char *readout,
+	short bipolar, int panel_top, int panel_bottom, int track_top, int track_bottom) {
 	int mid = (left + right) / 2;
-	UBYTE value = voice_get((UBYTE)control);
 	int knob = track_bottom - (int)(((long)(track_bottom - track_top) * value) / 255);
 	int zero = track_bottom - (int)(((long)(track_bottom - track_top) * 128) / 255);
 
@@ -632,30 +634,25 @@ static void draw_fader_box(int left, int right, int control, const char *label, 
 			hspan(mid - 5, mid + 5, y);
 	}
 	hspan(mid - 6, mid + 6, knob);
-	{
-		int live = voice_live((UBYTE)control);
+	if (live >= 0) {
+		int mark = track_bottom - (int)(((long)(track_bottom - track_top) * live) / 255);
 
-		if (live >= 0) {
-			int mark = track_bottom - (int)(((long)(track_bottom - track_top) * live) / 255);
-
-			hspan(mid - 8, mid - 6, mark);
-			hspan(mid + 6, mid + 8, mark);
-		}
+		hspan(mid - 8, mid - 6, mark);
+		hspan(mid + 6, mid + 8, mark);
 	}
 }
 
 static void draw_fader(int column, int columns, int control, const char *label, const char *readout, short bipolar,
 	int panel_top, int panel_bottom, int track_top, int track_bottom) {
-	int left = (column * SCREEN_WIDTH) / columns;
-	int right = ((column + 1) * SCREEN_WIDTH) / columns - 1;
-
-	draw_fader_box(left, right, control, label, readout, bipolar, panel_top, panel_bottom, track_top, track_bottom);
+	draw_fader_box(panel_column_left(column, columns), panel_column_right(column, columns),
+		voice_get((UBYTE)control), voice_live((UBYTE)control), label, readout, bipolar,
+		panel_top, panel_bottom, track_top, track_bottom);
 }
 
 static void draw_wave_button(int column, int columns, const char *label, UBYTE wave, int panel_top, int panel_bottom,
 	int icon_y, int icon_size) {
-	int left = (column * SCREEN_WIDTH) / columns;
-	int right = ((column + 1) * SCREEN_WIDTH) / columns - 1;
+	int left = panel_column_left(column, columns);
+	int right = panel_column_right(column, columns);
 	int mid = (left + right) / 2;
 
 	draw_panel_box(left, right, panel_top, panel_bottom);
@@ -678,26 +675,18 @@ static void draw_controls(void) {
 			SYNTH_ROW1_TRACK_TOP, SYNTH_ROW1_TRACK_BOTTOM);
 	draw_fader(VOICE_OSC2_SEMI, SYNTH_ROW1_COLUMNS, VOICE_OSC2_SEMI, "SEMI", semitone, 1,
 		SYNTH_ROW1_TOP, SYNTH_ROW1_BOTTOM, SYNTH_ROW1_TRACK_TOP, SYNTH_SEMI_TRACK_BOTTOM);
-	{
-		int left = (VOICE_OSC2_SEMI * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS;
-		int right = ((VOICE_OSC2_SEMI + 1) * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS - 1;
-
-		draw_step_buttons(left, right, SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM - 1);
-	}
+	draw_step_buttons(panel_column_left(VOICE_OSC2_SEMI, SYNTH_ROW1_COLUMNS),
+		panel_column_right(VOICE_OSC2_SEMI, SYNTH_ROW1_COLUMNS), SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM - 1);
 	draw_fader(VOICE_OSC2_FINE, SYNTH_ROW1_COLUMNS, VOICE_OSC2_FINE, "FINE", fine, 1,
 		SYNTH_ROW1_TOP, SYNTH_ROW1_BOTTOM, SYNTH_ROW1_TRACK_TOP, SYNTH_SEMI_TRACK_BOTTOM);
-	{
-		int left = (VOICE_OSC2_FINE * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS;
-		int right = ((VOICE_OSC2_FINE + 1) * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS - 1;
-
-		draw_step_buttons(left, right, SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM - 1);
-	}
+	draw_step_buttons(panel_column_left(VOICE_OSC2_FINE, SYNTH_ROW1_COLUMNS),
+		panel_column_right(VOICE_OSC2_FINE, SYNTH_ROW1_COLUMNS), SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM - 1);
 	draw_wave_button(VOICE_OSC2_FINE + 1, SYNTH_ROW1_COLUMNS, "OSC1", osc_wave(0), SYNTH_ROW1_TOP,
 		SYNTH_OSC_BUTTON_BOTTOM, SYNTH_ROW1_TOP + 22, 8);
 	draw_wave_button(VOICE_OSC2_FINE + 2, SYNTH_ROW1_COLUMNS, "OSC2", osc_wave(1), SYNTH_ROW1_TOP,
 		SYNTH_OSC_BUTTON_BOTTOM, SYNTH_ROW1_TOP + 22, 8);
 	{
-		int left = ((VOICE_OSC2_FINE + 1) * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS;
+		int left = panel_column_left(VOICE_OSC2_FINE + 1, SYNTH_ROW1_COLUMNS);
 		int right = SCREEN_WIDTH - 1;
 		int top = SYNTH_GATE_TOP;
 		int bottom = SYNTH_SEMI_BUTTON_BOTTOM - 1;
@@ -721,6 +710,69 @@ static void draw_controls(void) {
 			SYNTH_ROW3_TRACK_TOP, SYNTH_ROW3_TRACK_BOTTOM);
 }
 
+enum { FX_SHOW_PERCENT, FX_SHOW_SWITCH, FX_SHOW_STEPS };
+
+typedef struct {
+	const char *label;
+	UBYTE show;
+} FxFader;
+
+typedef struct {
+	const char *label;
+	UBYTE first;
+	UBYTE count;
+} FxGroup;
+
+static const FxFader fx_faders[FX_CONTROL_COUNT] = {
+	[FX_DRIVE] = { "DRIVE", FX_SHOW_SWITCH },
+	[FX_DELAY_STEPS] = { "STEP", FX_SHOW_STEPS },
+	[FX_DELAY_LEVEL] = { "LEVEL", FX_SHOW_SWITCH },
+	[FX_DELAY_FEEDBACK] = { "FDBK", FX_SHOW_PERCENT },
+	[FX_REVERB_DECAY] = { "DECAY", FX_SHOW_PERCENT },
+	[FX_REVERB_LEVEL] = { "LEVEL", FX_SHOW_SWITCH }
+};
+
+static const FxGroup fx_groups[] = {
+	{ "DIST", FX_DRIVE, 1 },
+	{ "DELAY", FX_DELAY_STEPS, 3 },
+	{ "REVERB", FX_REVERB_DECAY, 2 }
+};
+
+static void fx_readout(UBYTE control, char *text) {
+	UBYTE value = fx_get(control);
+	UBYTE show = fx_faders[control].show;
+
+	if (show == FX_SHOW_STEPS) {
+		format_number(text, fx_delay_steps());
+	} else if (show == FX_SHOW_SWITCH && value == 0) {
+		text[0] = 'O';
+		text[1] = 'F';
+		text[2] = 'F';
+		text[3] = 0;
+	} else {
+		format_number(text, (UWORD)((value * 100 + 127) / 255));
+	}
+}
+
+static void draw_fx(void) {
+	char readout[4];
+
+	for (UWORD i = 0; i < sizeof(fx_groups) / sizeof(fx_groups[0]); i++) {
+		const FxGroup *group = &fx_groups[i];
+		int left = panel_column_left(group->first, FX_CONTROL_COUNT);
+		int right = panel_column_right(group->first + group->count - 1, FX_CONTROL_COUNT);
+
+		draw_panel_box(left, right, FX_GROUP_TOP, FX_PANEL_TOP - 2);
+		draw_centered((left + right) / 2, (FX_GROUP_TOP + FX_PANEL_TOP - 2) / 2 - 3, group->label);
+	}
+	for (UBYTE control = 0; control < FX_CONTROL_COUNT; control++) {
+		fx_readout(control, readout);
+		draw_fader_box(panel_column_left(control, FX_CONTROL_COUNT), panel_column_right(control, FX_CONTROL_COUNT),
+			fx_get(control), -1, fx_faders[control].label, readout, 0,
+			FX_PANEL_TOP, FX_PANEL_BOTTOM, FX_TRACK_TOP, FX_TRACK_BOTTOM);
+	}
+}
+
 static void draw_tab(int left, int right, const char *label, short active) {
 	int top = SEQ_TAB_TOP;
 	int bottom = SEQ_TAB_BOTTOM - 1;
@@ -735,6 +787,7 @@ static void draw_tabs(void) {
 	draw_tab(SEQ_TAB_SEQ_LEFT, SEQ_TAB_SEQ_RIGHT, "SEQ", view == DISPLAY_SEQUENCE);
 	draw_tab(SEQ_TAB_DRAW_LEFT, SEQ_TAB_DRAW_RIGHT, "DRAW", view == DISPLAY_DRAW);
 	draw_tab(SEQ_TAB_SYNTH_LEFT, SEQ_TAB_SYNTH_RIGHT, "SYN", view == DISPLAY_SYNTH);
+	draw_tab(SEQ_TAB_FX_LEFT, SEQ_TAB_FX_RIGHT, "FX", view == DISPLAY_FX);
 	if (view == DISPLAY_DRAW) {
 		/* The oscillator tab is highlighted while that oscillator plays its custom wave. */
 		draw_tab(SEQ_TAB_PRESET_LEFT, SEQ_TAB_PRESET_RIGHT, synth_preset_name(draw_osc), 0);
@@ -788,6 +841,8 @@ void display_frame(const SeqStep *steps, UWORD current, UWORD bpm, WORD mouse_x,
 		draw_oscillator();
 	else if (view == DISPLAY_SYNTH)
 		draw_controls();
+	else if (view == DISPLAY_FX)
+		draw_fx();
 	else
 		draw_steps(steps, current, mouse_x, mouse_y);
 	draw_tabs();

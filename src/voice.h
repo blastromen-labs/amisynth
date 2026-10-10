@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "panel.h"
 #include "synth.h"
 
 enum {
@@ -64,19 +65,11 @@ static inline int synth_track_top(int y) {
 static inline int synth_panel_slot(int x, int y) {
 	int slot;
 
-	if (x < 0)
-		x = 0;
-	if (x >= SCREEN_WIDTH)
-		x = SCREEN_WIDTH - 1;
-	if (y >= SYNTH_ROW3_TOP) {
-		slot = (int)(((long)x * SYNTH_ROW3_COLUMNS) / SCREEN_WIDTH);
-		return VOICE_PULSE_WIDTH + slot;
-	}
-	if (y >= SYNTH_ROW2_TOP) {
-		slot = (int)(((long)x * SYNTH_ROW2_COLUMNS) / SCREEN_WIDTH);
-		return VOICE_CUTOFF + slot;
-	}
-	slot = (int)(((long)x * SYNTH_ROW1_COLUMNS) / SCREEN_WIDTH);
+	if (y >= SYNTH_ROW3_TOP)
+		return VOICE_PULSE_WIDTH + panel_column(x, SYNTH_ROW3_COLUMNS);
+	if (y >= SYNTH_ROW2_TOP)
+		return VOICE_CUTOFF + panel_column(x, SYNTH_ROW2_COLUMNS);
+	slot = panel_column(x, SYNTH_ROW1_COLUMNS);
 	if (slot <= VOICE_OSC2_FINE)
 		return slot;
 	if (y < SYNTH_OSC_BUTTON_BOTTOM)
@@ -97,17 +90,7 @@ static inline UBYTE voice_value_from_y(int y, int control) {
 		top = SYNTH_ROW2_TRACK_TOP;
 		bottom = SYNTH_ROW2_TRACK_BOTTOM;
 	}
-	int span = bottom - top;
-	int pos;
-
-	if (span < 1)
-		span = 1;
-	if (y <= top)
-		return 255;
-	if (y >= bottom)
-		return 0;
-	pos = bottom - y;
-	return (UBYTE)((pos * 255) / span);
+	return panel_value_from_y(y, top, bottom);
 }
 
 static inline int synth_column_step(int x, int y, int left, int right, int top, int bottom) {
@@ -118,16 +101,15 @@ static inline int synth_column_step(int x, int y, int left, int right, int top, 
 	return x < mid ? -1 : 1;
 }
 
-static inline int synth_semi_step(int x, int y) {
-	int left = (int)(((long)VOICE_OSC2_SEMI * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS);
-	int right = (int)(((long)(VOICE_OSC2_SEMI + 1) * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS) - 1;
+static inline int synth_button_step(int column, int x, int y) {
+	return synth_column_step(x, y, panel_column_left(column, SYNTH_ROW1_COLUMNS),
+		panel_column_right(column, SYNTH_ROW1_COLUMNS), SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM);
+}
 
-	return synth_column_step(x, y, left, right, SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM);
+static inline int synth_semi_step(int x, int y) {
+	return synth_button_step(VOICE_OSC2_SEMI, x, y);
 }
 
 static inline int synth_fine_step(int x, int y) {
-	int left = (int)(((long)VOICE_OSC2_FINE * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS);
-	int right = (int)(((long)(VOICE_OSC2_FINE + 1) * SCREEN_WIDTH) / SYNTH_ROW1_COLUMNS) - 1;
-
-	return synth_column_step(x, y, left, right, SYNTH_SEMI_BUTTON_TOP, SYNTH_SEMI_BUTTON_BOTTOM);
+	return synth_button_step(VOICE_OSC2_FINE, x, y);
 }

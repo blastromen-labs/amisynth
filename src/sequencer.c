@@ -1,6 +1,7 @@
 #include "sequencer.h"
 #include "audio.h"
 #include "config.h"
+#include "fx.h"
 #include "synth.h"
 #include "system.h"
 #include "voice.h"
@@ -64,10 +65,14 @@ void sequencer_init(void) {
 	clock_running = 0;
 }
 
+static ULONG step_rate(void) {
+	return (ULONG)bpm * 1000UL;
+}
+
 /* Ticks per sixteenth note, spreading the remainder so the tempo is exact on
    average. step_numer is the tick rate in millihertz times 15. */
 static UWORD step_interval(void) {
-	ULONG rate = (ULONG)bpm * 1000UL;
+	ULONG rate = step_rate();
 	ULONG base = step_numer / rate;
 
 	step_error += step_numer % rate;
@@ -78,6 +83,12 @@ static UWORD step_interval(void) {
 	if (base < 1)
 		base = 1;
 	return (UWORD)base;
+}
+
+UWORD sequencer_step_ticks(UWORD count) {
+	ULONG ticks = (step_numer * count) / step_rate();
+
+	return ticks > 65535UL ? 65535 : (UWORD)ticks;
 }
 
 static SynthWave step_wave(const SeqStep *step) {
@@ -122,6 +133,7 @@ static void begin_playback(void) {
 
 	step_error = 0;
 	index = 0;
+	fx_reset();
 	ticks = step_interval();
 	trigger_step(ticks);
 	step_countdown = ticks;

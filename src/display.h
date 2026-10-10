@@ -7,7 +7,8 @@
 enum {
 	DISPLAY_SEQUENCE = 0,
 	DISPLAY_DRAW,
-	DISPLAY_SYNTH
+	DISPLAY_SYNTH,
+	DISPLAY_FX
 };
 
 short display_init(void);

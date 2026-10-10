@@ -22,6 +22,8 @@ void sequencer_cycle_octave(void);
 short sequencer_octave(void);
 UWORD sequencer_sounding_note(UBYTE note);
 UWORD sequencer_bpm(void);
+/* Clock ticks in `count` sixteenth notes at the current tempo. */
+UWORD sequencer_step_ticks(UWORD count);
 void sequencer_set_bpm(UWORD bpm);
 void sequencer_set_note(UWORD step, short note);
 void sequencer_set_dur(UWORD step, UBYTE dur);
