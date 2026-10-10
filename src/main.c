@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "config.h"
 #include "display.h"
+#include "fx.h"
 #include "sequencer.h"
 #include "synth.h"
 #include "system.h"
@@ -58,6 +59,7 @@ static void edit_pattern(void) {
 	static short previous_left;
 	static short previous_right;
 	static int control_grab = -1;
+	static int fx_grab = -1;
 	static short painting;
 	short clicked = left && !previous_left;
 	short began = 0;
@@ -80,6 +82,9 @@ static void edit_pattern(void) {
 			clicked = 0;
 		} else if (x >= SEQ_TAB_SYNTH_LEFT && x < SEQ_TAB_SYNTH_RIGHT) {
 			display_set_view(DISPLAY_SYNTH);
+			clicked = 0;
+		} else if (x >= SEQ_TAB_FX_LEFT && x < SEQ_TAB_FX_RIGHT) {
+			display_set_view(DISPLAY_FX);
 			clicked = 0;
 		} else if (display_view() == DISPLAY_DRAW && x >= SEQ_TAB_PRESET_LEFT && x < SEQ_TAB_PRESET_RIGHT) {
 			synth_cycle_preset(draw_osc);
@@ -123,6 +128,11 @@ static void edit_pattern(void) {
 		y >= SYNTH_PANE_TOP && y < SYNTH_PANE_BOTTOM && slot < VOICE_CONTROL_COUNT)
 		control_grab = slot;
 
+	if (!left)
+		fx_grab = -1;
+	else if (display_view() == DISPLAY_FX && fx_grab < 0)
+		fx_grab = fx_panel_slot(x, y);
+
 	if (painting) {
 		paint_custom(draw_osc, x, y, began);
 		use_custom_wave(draw_osc);
@@ -133,6 +143,8 @@ static void edit_pattern(void) {
 		!(control_grab == VOICE_OSC2_SEMI && synth_semi_step(x, y)) &&
 		!(control_grab == VOICE_OSC2_FINE && synth_fine_step(x, y))) {
 		voice_set((UBYTE)control_grab, voice_value_from_y(y, control_grab));
+	} else if (left && fx_grab >= 0) {
+		fx_set((UBYTE)fx_grab, fx_value_from_y(y));
 	} else if (clicked && display_view() == DISPLAY_SYNTH && slot == SYNTH_GATE_SLOT) {
 		voice_toggle_gate();
 	} else if (clicked && display_view() == DISPLAY_SYNTH && y >= SYNTH_PANE_TOP &&

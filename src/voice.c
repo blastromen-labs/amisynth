@@ -1,5 +1,6 @@
 #include "voice.h"
 #include "audio.h"
+#include "fx.h"
 
 #define ENV_PEAK (SYNTH_MAX_VOLUME * 256)
 #define ENV_IDLE 0
@@ -39,6 +40,7 @@ typedef struct {
 	UBYTE cutoff;
 	UBYTE resonance;
 	UBYTE pulse;
+	UBYTE drive;
 	UBYTE audible;
 	UWORD gen;
 } Rendered;
@@ -220,6 +222,7 @@ void voice_init(void) {
 		rendered[i].cutoff = cutoff;
 		rendered[i].resonance = controls[VOICE_RESONANCE];
 		rendered[i].pulse = pulse;
+		rendered[i].drive = 0;
 		rendered[i].audible = 0;
 	}
 	rendered[0].wave = (UBYTE)wave;
@@ -392,6 +395,7 @@ static UWORD note_with_samples(UWORD preferred, UWORD samples) {
 
 static int render_osc(int index, SynthWave sounding, UWORD render_note, UBYTE cutoff, UBYTE pulse, BYTE *dest, short audible) {
 	UBYTE resonance = controls[VOICE_RESONANCE];
+	UBYTE drive = fx_get(FX_DRIVE);
 	UWORD gen = synth_custom_generation((UBYTE)index);
 	Rendered *state = &rendered[index];
 	short open = cutoff >= 250 && resonance == 0;
@@ -402,7 +406,7 @@ static int render_osc(int index, SynthWave sounding, UWORD render_note, UBYTE cu
 	short moved = cutoff_moved || pulse_moved;
 	/* An open filter copies the source. The same wave and length is the same buffer. */
 	short force = !state->audible || state->wave != (UBYTE)sounding ||
-		state->resonance != resonance ||
+		state->resonance != resonance || state->drive != drive ||
 		(note_changed && !(open && same_length)) ||
 		(sounding == SYNTH_WAVE_CUSTOM && state->gen != gen);
 
@@ -416,11 +420,13 @@ static int render_osc(int index, SynthWave sounding, UWORD render_note, UBYTE cu
 	if (!(force || (moved && render_hold == 0)))
 		return moved ? 2 : 0;
 	synth_render(sounding, (UBYTE)index, render_note, cutoff, resonance, pulse, dest);
+	fx_distort(dest, synth_note_samples(render_note));
 	state->wave = (UBYTE)sounding;
 	state->note = (UBYTE)render_note;
 	state->cutoff = cutoff;
 	state->resonance = resonance;
 	state->pulse = pulse;
+	state->drive = drive;
 	state->gen = gen;
 	return moved ? 1 : 0;
 }
@@ -456,6 +462,7 @@ void voice_tick(void) {
 		volume = 0;
 	if (volume > SYNTH_MAX_VOLUME)
 		volume = SYNTH_MAX_VOLUME;
+	volume = fx_drive_volume((UBYTE)volume);
 
 	synth_tuned_pitch(note, tune, &period2, &samples2);
 	period2 = bent_period(period2);
@@ -489,8 +496,16 @@ void voice_tick(void) {
 	} else
 		render_hold = 0;
 
-	audio_update(buf1, period, samples, (UBYTE)(volume * mix1 / 255),
-		buf2, period2, samples2, (UBYTE)(volume * mix2 / 255));
+	{
+		const AudioVoice dry[SYNTH_OSC_COUNT] = {
+			{ buf1, period, samples, (UBYTE)(volume * mix1 / 255) },
+			{ buf2, period2, samples2, (UBYTE)(volume * mix2 / 255) }
+		};
+		AudioVoice wet[SYNTH_OSC_COUNT];
+
+		fx_apply(dry, wet);
+		audio_update(dry, wet);
+	}
 }
 
 UBYTE voice_volume(void) {
