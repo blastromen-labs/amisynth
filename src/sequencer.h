@@ -10,8 +10,11 @@ typedef struct {
 } SeqStep;
 
 void sequencer_init(void);
-void sequencer_clock_start(void);
+/* tick_mhz is how many sequencer_tick calls the clock makes in 1000 seconds. */
+void sequencer_clock_start(ULONG tick_mhz);
 void sequencer_clock_stop(void);
+/* One clock tick: steps the pattern and updates the voice and Paula. */
+void sequencer_tick(void);
 short sequencer_playing(void);
 void sequencer_toggle_play(void);
 UWORD sequencer_index(void);

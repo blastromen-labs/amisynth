@@ -52,3 +52,4 @@ jobs:
           files: |
             out/amisynth.exe
             out/amisynth.exe.info
+            out/amisynth.elf

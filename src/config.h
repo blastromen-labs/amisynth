@@ -123,6 +123,32 @@
 /* Top-left corner of the picture on the beam, in lowres pixels and lines. */
 #define DISPLAY_LEFT 129
 #define DISPLAY_TOP 44
+/* Background and drawing colour, $RGB. */
+#define DISPLAY_COLOR_BACK 0x112
+#define DISPLAY_COLOR_FRONT 0x6cf
+
+/* How the program runs: in a window on Workbench, on its own Intuition
+   screen, or owning the whole machine. SCREEN and TAKEOVER pick the others. */
+#define HOST_WINDOW 0
+#define HOST_SCREEN 1
+#define HOST_TAKEOVER 2
+#define HOST_DEFAULT HOST_WINDOW
+#define WINDOW_TITLE "amisynth"
+/* Rows shown in a window or screen. Everything below the tempo row is empty. */
+#define WINDOW_HEIGHT SEQ_TEMPO_BOTTOM
+/* A lowres pixel is 44 resolution ticks wide and high. The window widens the
+   picture 1, 2 or 4 times to keep that shape on the Workbench screen. */
+#define WINDOW_PIXEL_TICKS 44
+/* Widened columns that may be left out, spread evenly, when the window is a
+   little too wide for Workbench. Any more and the picture gets its own screen. */
+#define WINDOW_MAX_DROP 16
+/* Only rows that changed since the last frame are redrawn. Changed rows this
+   close together are drawn as one band, which costs fewer blits. */
+#define WINDOW_BAND_GAP 8
+/* QUITAFTER compares every this many window rows with the picture before quitting. */
+#define WINDOW_CHECK_STEP 3
+/* audio.device priority for claiming all four channels. */
+#define AUDIO_CLAIM_PRIORITY 0
 
 /* Non-interlaced beam: lines per frame and frames per 1000 seconds.
    PAL is 313 lines of 227 colour clocks, NTSC 263 lines of 227.5. */
@@ -137,3 +163,26 @@
 #define COPPER_WORDS (32 + CLOCK_TICKS_PER_FRAME * 4)
 /* Beam polls before a frame wait gives up. */
 #define BEAM_WAIT_POLLS 400000UL
+
+/* Diagnostics. Every default here can be changed from the Shell, see README. */
+/* 0: no log unless LOG=<file> is given. 1: always log to DIAG_LOG_PATH. */
+#define DIAG_LOG_DEFAULT 0
+#define DIAG_LOG_PATH "PROGDIR:amisynth.log"
+/* Used when the program's own drawer is write-protected. */
+#define DIAG_LOG_FALLBACK "RAM:amisynth.log"
+#define DIAG_LINE_MAX 128
+/* Log lines kept in memory while the program owns the machine. */
+#define DIAG_RING_LINES 48
+/* Seconds without a drawn frame before the watchdog rescues the program. 0 turns it off. */
+#define DIAG_WATCHDOG_SECONDS 4
+/* DOS ticks (1/50 s) for disks and the log file to settle before the takeover. */
+#define DIAG_SETTLE_TICKS 50
+/* Frames drawn before CRASHTEST or HANGTEST fires. */
+#define DIAG_SELFTEST_FRAMES 100
+/* Long words of the crashed stack written to the log. */
+#define DIAG_STACK_LONGS 16
+/* Background colours while the screen is still blank, so a hang shows how far startup got. */
+#define DIAG_COLOR_TAKEN 0x606
+#define DIAG_COLOR_HOOKED 0x066
+#define DIAG_COLOR_CRASH 0xf00
+#define DIAG_COLOR_WATCHDOG 0xf80

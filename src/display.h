@@ -13,8 +13,12 @@ enum {
 
 short display_init(void);
 void display_shutdown(void);
+/* Hardware mode only: points the copper at the picture. */
 void display_start(void);
-void display_flip(void);
+/* Shows the frame just drawn and starts the next one. Returns the finished plane. */
+const UBYTE *display_flip(void);
+/* The drawn crosshair stands in for the pointer while the program owns the machine. */
+void display_set_cursor(short on);
 void display_set_view(UBYTE view);
 UBYTE display_view(void);
 UBYTE display_draw_osc(void);

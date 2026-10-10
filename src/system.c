@@ -1,11 +1,16 @@
 #include "system.h"
 #include "config.h"
+#include "diag.h"
 
+#include <proto/dos.h>
 #include <proto/exec.h>
 #include <proto/graphics.h>
 #include <dos/dosextens.h>
 #include <exec/execbase.h>
+#include <exec/memory.h>
 #include <graphics/gfxbase.h>
+#include <graphics/modeid.h>
+#include <graphics/monitor.h>
 #include <hardware/custom.h>
 #include <hardware/dmabits.h>
 #include <hardware/intbits.h>
@@ -14,6 +19,7 @@
 struct ExecBase *SysBase;
 volatile struct Custom *custom;
 struct GfxBase *GfxBase;
+struct DosLibrary *DOSBase;
 
 static const VideoTiming pal_timing = { VIDEO_PAL_LINES, VIDEO_PAL_FRAME_MHZ };
 static const VideoTiming ntsc_timing = { VIDEO_NTSC_LINES, VIDEO_NTSC_FRAME_MHZ };
@@ -77,8 +83,9 @@ short system_init(void) {
 	custom = (struct Custom *)0xdff000;
 	workbench_accept();
 
-	GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 0);
-	if (!GfxBase)
+	DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 36);
+	GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 36);
+	if (!DOSBase || !GfxBase)
 		return 0;
 
 	video = (GfxBase->DisplayFlags & PAL) ? &pal_timing : &ntsc_timing;
@@ -95,16 +102,44 @@ short system_init(void) {
 void system_shutdown(void) {
 	if (GfxBase)
 		CloseLibrary((struct Library *)GfxBase);
+	if (DOSBase)
+		CloseLibrary((struct Library *)DOSBase);
 	GfxBase = 0;
+	DOSBase = 0;
 	workbench_reply();
+}
+
+short system_from_cli(void) {
+	return !workbench_message;
+}
+
+const struct WBStartup *system_workbench(void) {
+	return workbench_message;
 }
 
 const VideoTiming *system_video(void) {
 	return video;
 }
 
-static UWORD beam_line(void) {
-	return (UWORD)((*(volatile ULONG *)0xdff004 >> 8) & 0x7ff);
+APTR system_vbr(void) {
+	return vbr;
+}
+
+/* Only V0-V8 count: the VPOSR bits above V8 are not stable on an A1200. */
+static UWORD read_beam_line(void) {
+	return (UWORD)((*(volatile ULONG *)0xdff004 >> 8) & 0x1ff);
+}
+
+/* The chip bus reads VPOSR and VHPOSR one after the other, so a line change
+   in between, such as 255 to 256, gives a line 256 off. Two equal reads in a
+   row cannot have straddled it. */
+UWORD system_beam_line(void) {
+	UWORD line;
+
+	do
+		line = read_beam_line();
+	while (line != read_beam_line());
+	return line;
 }
 
 /* Returns once the beam is below the picture, so the next frame shows whatever
@@ -112,14 +147,93 @@ static UWORD beam_line(void) {
 void system_wait_vbl(void) {
 	ULONG polls = BEAM_WAIT_POLLS;
 
-	while (beam_line() >= sync_line && --polls)
+	while (system_beam_line() >= sync_line && --polls)
 		;
 	polls = BEAM_WAIT_POLLS;
-	while (beam_line() < sync_line && --polls)
+	while (system_beam_line() < sync_line && --polls)
 		;
 }
 
-void system_take(void) {
+static const char *cpu_name(UWORD attn) {
+	if (attn & AFF_68060)
+		return "68060";
+	if (attn & AFF_68040)
+		return "68040";
+	if (attn & AFF_68030)
+		return "68030";
+	if (attn & AFF_68020)
+		return "68020";
+	return (attn & AFF_68010) ? "68010" : "68000";
+}
+
+static const char *fpu_name(UWORD attn) {
+	if (attn & AFF_FPU40)
+		return "internal";
+	if (attn & AFF_68882)
+		return "68882";
+	return (attn & AFF_68881) ? "68881" : "none";
+}
+
+/* Lisa answers $F8 and the ECS Denise $FC. An OCS Denise has no id register. */
+static const char *chipset_hardware(UWORD denise_id) {
+	if ((denise_id & 0xff) == 0xf8)
+		return "AGA";
+	return (denise_id & 0xff) == 0xfc ? "ECS" : "OCS";
+}
+
+/* Kickstart 3.x stays in ECS mode until SetPatch switches graphics to AGA. */
+static const char *chipset_mode(UBYTE bits) {
+	if ((bits & (GFXF_AA_ALICE | GFXF_AA_LISA)) == (GFXF_AA_ALICE | GFXF_AA_LISA))
+		return "AGA";
+	return (bits & GFXF_HR_AGNUS) ? "ECS" : "OCS";
+}
+
+/* The picture is a plain 15 kHz PAL or NTSC display. Any other Workbench
+   monitor is usually a 31 kHz mode for a VGA-only display, which goes black
+   when the program switches to 15 kHz. */
+static short standard_monitor(ULONG mode) {
+	ULONG monitor = mode & MONITOR_ID_MASK;
+
+	return mode == (ULONG)INVALID_ID || monitor == DEFAULT_MONITOR_ID ||
+		monitor == PAL_MONITOR_ID || monitor == NTSC_MONITOR_ID;
+}
+
+void system_describe(void) {
+	UWORD attn = SysBase->AttnFlags;
+	struct View *view = GfxBase->ActiView;
+	struct MonitorSpec *monitor = GfxBase->current_monitor;
+	ULONG mode = view && view->ViewPort ? (ULONG)GetVPModeID(view->ViewPort) : INVALID_ID;
+	struct Task *self = FindTask(0);
+
+	diag_log("exec %ld.%ld, graphics %ld.%ld, dos %ld.%ld",
+		(ULONG)SysBase->LibNode.lib_Version, (ULONG)SysBase->LibNode.lib_Revision,
+		(ULONG)GfxBase->LibNode.lib_Version, (ULONG)GfxBase->LibNode.lib_Revision,
+		(ULONG)DOSBase->dl_lib.lib_Version, (ULONG)DOSBase->dl_lib.lib_Revision);
+	diag_log("cpu %s, fpu %s, attnflags $%04lx, vbr $%08lx",
+		(ULONG)cpu_name(attn), (ULONG)fpu_name(attn), (ULONG)attn, (ULONG)get_vbr());
+	diag_log("chipset %s, graphics in %s mode, chiprevbits $%02lx, agnus id $%02lx, denise id $%04lx",
+		(ULONG)chipset_hardware(custom->deniseid), (ULONG)chipset_mode(GfxBase->ChipRevBits0),
+		(ULONG)GfxBase->ChipRevBits0, (ULONG)((custom->vposr >> 8) & 0x7f), (ULONG)custom->deniseid);
+	diag_log("video %s, %ld lines, vblank %ld Hz, displayflags $%04lx",
+		(ULONG)(video == &pal_timing ? "PAL" : "NTSC"), (ULONG)video->lines,
+		(ULONG)SysBase->VBlankFrequency, (ULONG)GfxBase->DisplayFlags);
+	diag_log("workbench mode id $%08lx, monitor %s, beamcon0 $%04lx", mode,
+		(ULONG)(monitor && monitor->ms_Node.xln_Name ? monitor->ms_Node.xln_Name : "?"),
+		(ULONG)(monitor ? monitor->BeamCon0 : 0));
+	if (!standard_monitor(mode))
+		diag_log("WARNING: Workbench is not on a 15 kHz PAL/NTSC monitor. This program shows 15 kHz PAL/NTSC.");
+	diag_log("chip free %lu largest %lu, fast free %lu largest %lu",
+		AvailMem(MEMF_CHIP), AvailMem(MEMF_CHIP | MEMF_LARGEST),
+		AvailMem(MEMF_FAST), AvailMem(MEMF_FAST | MEMF_LARGEST));
+	diag_log("started from %s, task stack %lu bytes, supervisor stack $%08lx-$%08lx",
+		(ULONG)(system_from_cli() ? "Shell" : "Workbench"),
+		(ULONG)self->tc_SPUpper - (ULONG)self->tc_SPLower,
+		(ULONG)SysBase->SysStkLower, (ULONG)SysBase->SysStkUpper);
+}
+
+void system_take(UWORD settle_ticks) {
+	if (settle_ticks)
+		Delay(settle_ticks);
 	Forbid();
 	system_adkcon = custom->adkconr;
 	system_ints = custom->intenar;

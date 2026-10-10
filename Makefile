@@ -11,7 +11,7 @@ cpp_sources := $(wildcard *.cpp) $(wildcard $(addsuffix *.cpp,$(subdirs)))
 cpp_objects := $(addprefix obj/,$(patsubst %.cpp,%.o,$(notdir $(cpp_sources))))
 c_sources := $(wildcard *.c) $(wildcard $(addsuffix *.c,$(subdirs)))
 c_objects := $(addprefix obj/,$(patsubst %.c,%.o,$(notdir $(c_sources))))
-s_sources := support/gcc8_a_support.s src/sequencer_isr.s
+s_sources := support/gcc8_a_support.s $(wildcard src/*.s)
 s_objects := $(addprefix obj/,$(patsubst %.s,%.o,$(notdir $(s_sources))))
 vasm_sources := $(wildcard *.asm) $(wildcard $(addsuffix *.asm, $(subdirs)))
 vasm_objects := $(addprefix obj/, $(patsubst %.asm,%.o,$(notdir $(vasm_sources))))
@@ -25,11 +25,23 @@ VASM = vasmm68k_mot
 
 ifdef WINDOWS
 	SDKDIR = $(abspath $(dir $(shell where $(CC)))..\m68k-amiga-elf\sys-include)
+	NULLDEV = NUL
 else
 	SDKDIR = $(abspath $(dir $(shell which $(CC)))../m68k-amiga-elf/sys-include)
+	NULLDEV = /dev/null
 endif
 
-CCFLAGS   = -g -MP -MMD -m68020 -Ofast -nostdlib -Wextra -Wno-unused-function -Wno-volatile-register-var -fomit-frame-pointer -fno-tree-loop-distribution -flto -fwhole-program -fno-exceptions -ffunction-sections -fdata-sections -I.
+# Written to the log, so a crash report can be matched with its amisynth.elf.
+BUILD_ID := $(shell git describe --always --dirty 2>$(NULLDEV))
+ifeq ($(BUILD_ID),)
+	BUILD_ID = unknown
+endif
+
+# -msoft-float: the compiler otherwise assumes an FPU and saves FPU registers
+# in some functions, which crashes the 68EC020 of a stock A1200.
+# OPT picks the optimisation, e.g. `make clean all OPT=-O0` for a test build.
+OPT      ?= -Ofast -flto -fwhole-program
+CCFLAGS   = -g -MP -MMD -m68020 -msoft-float $(OPT) -nostdlib -Wextra -Wno-unused-function -Wno-volatile-register-var -fomit-frame-pointer -fno-tree-loop-distribution -fno-exceptions -ffunction-sections -fdata-sections -I. -DBUILD_ID=\"$(BUILD_ID)\"
 CPPFLAGS  = $(CCFLAGS) -fno-rtti -fcoroutines -fno-use-cxa-atexit
 ASFLAGS   = -mcpu=68020 -g --register-prefix-optional -I$(SDKDIR)
 LDFLAGS   = -Wl,--emit-relocs,--gc-sections,-Ttext=0,-Map=$(OUT).map
@@ -59,6 +71,11 @@ else
 endif
 
 -include $(objects:.o=.d)
+
+# The build id changes without any source changing.
+obj/diag.o: FORCE
+FORCE:
+.PHONY: all clean FORCE
 
 $(cpp_objects) : obj/%.o : %.cpp
 	$(info Compiling $<)

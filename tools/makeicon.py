@@ -15,6 +15,14 @@ WB_MAGIC = 0xE310
 WB_TOOL = 3
 NO_ICON_POSITION = 0x80000000
 STACK_SIZE = 16384
+# Switches the program reads from its icon. In brackets they are off; delete the
+# brackets in the icon's Information window to turn one on.
+TOOL_TYPES = (
+    "(SCREEN)",
+    "(TAKEOVER)",
+    "(NOAUDIO)",
+    "(LOG=RAM:amisynth.log)",
+)
 
 
 def put(image, x, y, color):
@@ -117,8 +125,21 @@ def disk_object(normal_at, selected_at):
     header = struct.pack(">HH", WB_MAGIC, 1)
     header += gadget
     header += bytes((WB_TOOL, 0))
-    header += struct.pack(">IIIIIII", 0, 0, NO_ICON_POSITION, NO_ICON_POSITION, 0, 0, STACK_SIZE)
+    has_tool_types = 1 if TOOL_TYPES else 0
+    header += struct.pack(">IIIIIII", 0, has_tool_types, NO_ICON_POSITION, NO_ICON_POSITION, 0, 0, STACK_SIZE)
     return header
+
+
+def tool_types_block():
+    """The tooltype array that follows the images: its size in bytes with the
+    closing null entry, then each string's length and text with its null."""
+    if not TOOL_TYPES:
+        return b""
+    block = struct.pack(">I", (len(TOOL_TYPES) + 1) * 4)
+    for entry in TOOL_TYPES:
+        text = entry.encode("latin-1") + b"\x00"
+        block += struct.pack(">I", len(text)) + text
+    return block
 
 
 def build():
@@ -134,6 +155,7 @@ def build():
         raise RuntimeError("DiskObject must be 78 bytes")
     blob += image_block(normal, normal_bits)
     blob += image_block(selected, selected_bits)
+    blob += tool_types_block()
     return blob, normal, selected
 
 

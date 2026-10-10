@@ -11,6 +11,11 @@ typedef struct {
 	UBYTE volume;
 } AudioVoice;
 
+/* Off leaves Paula untouched, apart from silencing it on stop. */
+void audio_enable(short on);
+/* Takes all four channels from audio.device while AmigaOS keeps running. */
+short audio_claim(void);
+void audio_release(void);
 void audio_init(const void *wave_a, const void *wave_b, UWORD period, UWORD samples);
 void audio_start(void);
 /* One voice per oscillator on each side of the stereo output. */

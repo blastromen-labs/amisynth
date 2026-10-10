@@ -1,13 +1,19 @@
-#include "audio.h"
 #include "config.h"
+#include "crash.h"
+#include "diag.h"
 #include "display.h"
 #include "fx.h"
+#include "host.h"
+#include "options.h"
 #include "sequencer.h"
 #include "synth.h"
 #include "system.h"
 #include "voice.h"
 
+#include <proto/dos.h>
+
 static short leave;
+static Options options;
 
 static short in_plot(int x, int y) {
 	return x >= DRAW_PLOT_LEFT && x < DRAW_PLOT_RIGHT && y >= DRAW_TOP && y < DRAW_BOTTOM;
@@ -50,12 +56,12 @@ static void paint_custom(UBYTE osc, int x, int y, short fresh) {
 	last_value = value;
 }
 
-static void edit_pattern(void) {
-	WORD x = system_mouse_x();
-	WORD y = system_mouse_y();
+static void edit_pattern(const HostInput *input) {
+	WORD x = input->x;
+	WORD y = input->y;
 	UWORD step = sequencer_step_from_x(x);
-	short left = system_mouse_left();
-	short right = system_mouse_right();
+	short left = input->left;
+	short right = input->right;
 	static short previous_left;
 	static short previous_right;
 	static int control_grab = -1;
@@ -183,45 +189,124 @@ static void edit_pattern(void) {
 	previous_right = right;
 }
 
+static const char *on_off(short on) {
+	return on ? "on" : "off";
+}
+
+static void self_test(void) {
+	static UWORD frames;
+
+	if ((!options.crash_test && !options.hang_test) || ++frames != DIAG_SELFTEST_FRAMES)
+		return;
+	if (options.crash_test) {
+		diag_log("self test: illegal instruction");
+		__asm volatile("illegal");
+	}
+	diag_log("self test: endless loop");
+	for (;;)
+		__asm volatile("");
+}
+
+/* Brings everything down from wherever startup or a crash left it. */
+static void finish(void) {
+	/* With the log going straight to disk, the crash record is written before
+	   cleanup, which may wait on a lock the crashed code still held. */
+	short reported = !diag_held();
+
+	diag_stage(DIAG_STAGE_SHUTDOWN);
+	if (reported)
+		crash_report();
+	host_stop();
+	crash_uninstall();
+	display_shutdown();
+	synth_shutdown();
+	if (!reported)
+		crash_report();
+	diag_log("done");
+	diag_close();
+	options_free();
+	system_shutdown();
+}
+
+static short prepare(void) {
+	diag_stage(DIAG_STAGE_SEQUENCER);
+	sequencer_init();
+	diag_stage(DIAG_STAGE_SYNTH);
+	if (!synth_init()) {
+		diag_say("amisynth: not enough chip memory for the waves");
+		return 0;
+	}
+	diag_stage(DIAG_STAGE_DISPLAY);
+	if (!display_init()) {
+		diag_say("amisynth: not enough chip memory for the screen");
+		return 0;
+	}
+	diag_stage(DIAG_STAGE_VOICE);
+	voice_init();
+	return 1;
+}
+
 int main(void) {
-	const SeqStep *steps;
+	static short running;
+	static UWORD frames;
+	HostInput input = { SCREEN_WIDTH / 2, SCREEN_HEIGHT / 3, 0, 0, 0 };
 
 	if (!system_init()) {
 		system_shutdown();
-		return 0;
+		return RETURN_FAIL;
 	}
-	sequencer_init();
-	if (!synth_init() || !display_init()) {
-		synth_shutdown();
-		display_shutdown();
+	if (!options_read(&options, system_workbench())) {
+		PrintFault(IoErr(), (CONST_STRPTR)"amisynth");
+		PutStr((CONST_STRPTR)"Template: " OPTIONS_TEMPLATE "\n");
 		system_shutdown();
-		return 0;
+		return RETURN_FAIL;
 	}
-	voice_init();
+	diag_open(&options);
+	diag_stage(DIAG_STAGE_START);
+	system_describe();
+	diag_log("options: host %s, ticks %s, audio %s, catch %s, watchdog %ld s, settle %ld, serial %s, crashtest %s, hangtest %s",
+		(ULONG)options_host_name(options.host),
+		(ULONG)on_off(options.ticks), (ULONG)on_off(options.audio), (ULONG)on_off(options.catch_crashes),
+		(ULONG)options.watchdog_seconds, (ULONG)options.settle_ticks, (ULONG)on_off(options.serial),
+		(ULONG)on_off(options.crash_test), (ULONG)on_off(options.hang_test));
 
-	steps = sequencer_steps();
-	system_take();
-	display_start();
-	audio_init(synth_voice(), synth_voice2(), synth_note_period(steps[0].note), synth_note_samples(steps[0].note));
-	sequencer_clock_start();
+	if (__builtin_setjmp(crash_jump)) {
+		finish();
+		return RETURN_FAIL;
+	}
+	if (options.catch_crashes)
+		crash_install_task();
+	if (!prepare() || !host_start(&options)) {
+		finish();
+		return RETURN_FAIL;
+	}
 
 	while (1) {
-		system_wait_vbl();
-		display_flip();
-		system_mouse_update();
-		if ((system_mouse_left() && system_mouse_right()) || leave)
-			break;
+		const UBYTE *shown;
 
-		edit_pattern();
+		host_wait_frame();
+		shown = display_flip();
+		host_present(shown);
+		host_read_input(&input);
+		if ((input.left && input.right) || input.quit || leave)
+			break;
+		if (++frames == options.quit_frames) {
+			host_check(shown);
+			break;
+		}
+
+		edit_pattern(&input);
 		display_frame(sequencer_steps(), sequencer_index(), sequencer_bpm(),
-			system_mouse_x(), system_mouse_y(), voice_volume());
+			input.x, input.y, voice_volume());
+		crash_heartbeat();
+		if (!running) {
+			running = 1;
+			diag_stage(DIAG_STAGE_RUNNING);
+		}
+		self_test();
 	}
 
-	sequencer_clock_stop();
-	audio_stop();
-	system_free();
-	display_shutdown();
-	synth_shutdown();
-	system_shutdown();
-	return 0;
+	diag_log("ran %ld frames", (ULONG)frames);
+	finish();
+	return RETURN_OK;
 }

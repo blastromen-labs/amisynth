@@ -3,7 +3,6 @@
 #include "config.h"
 #include "fx.h"
 #include "synth.h"
-#include "system.h"
 #include "voice.h"
 
 #include <hardware/custom.h>
@@ -165,18 +164,9 @@ static void advance_step(void) {
 	}
 }
 
-extern void sequencer_tick_isr(void);
-
-/* Called from sequencer_isr.s. A C interrupt attribute emits an FPU
-   save, and a plain A1200 traps that as a software failure. */
-__attribute__((used, externally_visible, noinline))
-void sequencer_tick_service(void) {
+void sequencer_tick(void) {
 	short started = 0;
 
-	if (!(custom->intreqr & INTF_COPER))
-		return;
-	custom->intreq = INTF_COPER;
-	custom->intreq = INTF_COPER;
 	if (want_play != playing) {
 		playing = want_play;
 		if (playing) {
@@ -193,6 +183,17 @@ void sequencer_tick_service(void) {
 		audio_start();
 }
 
+/* Called from sequencer_isr.s on the copper interrupt. A C interrupt
+   attribute emits an FPU save, and a plain A1200 traps that as a software failure. */
+__attribute__((used, externally_visible, noinline))
+void sequencer_tick_service(void) {
+	if (!(custom->intreqr & INTF_COPER))
+		return;
+	custom->intreq = INTF_COPER;
+	custom->intreq = INTF_COPER;
+	sequencer_tick();
+}
+
 short sequencer_playing(void) { return want_play; }
 
 void sequencer_toggle_play(void) {
@@ -200,17 +201,13 @@ void sequencer_toggle_play(void) {
 		want_play = want_play ? 0 : 1;
 }
 
-void sequencer_clock_start(void) {
-	step_numer = system_video()->frame_mhz * CLOCK_TICKS_PER_FRAME * 15UL;
+void sequencer_clock_start(ULONG tick_mhz) {
+	step_numer = tick_mhz * 15UL;
 	playing = 0;
 	clock_running = 1;
-	system_ticks_on(sequencer_tick_isr);
 }
 
 void sequencer_clock_stop(void) {
-	if (!clock_running)
-		return;
-	system_ticks_off();
 	want_play = 0;
 	playing = 0;
 	clock_running = 0;

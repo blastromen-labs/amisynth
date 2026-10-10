@@ -24,6 +24,7 @@ static UWORD *cop_plane_lo;
 static UBYTE front;
 static UBYTE view;
 static UBYTE draw_osc;
+static UBYTE cursor = 1;
 
 static void plot(int x, int y) {
 	if ((unsigned)x >= SCREEN_WIDTH || (unsigned)y >= SCREEN_HEIGHT)
@@ -425,8 +426,8 @@ void display_start(void) {
 	cop_plane_hi = list - 1;
 	list = cop_move(list, offsetof(struct Custom, bplpt[0]) + 2, (UWORD)plane);
 	cop_plane_lo = list - 1;
-	list = cop_move(list, offsetof(struct Custom, color[0]), 0x112);
-	list = cop_move(list, offsetof(struct Custom, color[1]), 0x6cf);
+	list = cop_move(list, offsetof(struct Custom, color[0]), DISPLAY_COLOR_BACK);
+	list = cop_move(list, offsetof(struct Custom, color[1]), DISPLAY_COLOR_FRONT);
 	list = cop_ticks(list);
 	*list++ = 0xffff;
 	*list++ = 0xfffe;
@@ -459,16 +460,22 @@ static UBYTE osc_wave(UBYTE osc) {
 	return osc == 0 ? sequencer_osc1_wave() : voice_osc2();
 }
 
-void display_flip(void) {
-	ULONG addr;
+const UBYTE *display_flip(void) {
+	const UBYTE *finished = bitplane;
 
-	if (!cop_plane_hi || !bitplane)
-		return;
-	addr = (ULONG)bitplane;
-	*cop_plane_hi = (UWORD)(addr >> 16);
-	*cop_plane_lo = (UWORD)addr;
+	if (!bitplane)
+		return 0;
+	if (cop_plane_hi) {
+		*cop_plane_hi = (UWORD)((ULONG)finished >> 16);
+		*cop_plane_lo = (UWORD)(ULONG)finished;
+	}
 	front ^= 1;
 	bitplane = planes[front];
+	return finished;
+}
+
+void display_set_cursor(short on) {
+	cursor = on ? 1 : 0;
 }
 
 static const char glyph_keys[] = "ADSRCUTEBFG#0123456789-+QWIPLONYMHKXV";
@@ -852,5 +859,6 @@ void display_frame(const SeqStep *steps, UWORD current, UWORD bpm, WORD mouse_x,
 	draw_random_button();
 	draw_length_button(sequencer_length());
 	draw_exit_button();
-	draw_cursor(mouse_x, mouse_y);
+	if (cursor)
+		draw_cursor(mouse_x, mouse_y);
 }
